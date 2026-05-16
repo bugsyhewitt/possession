@@ -13,7 +13,9 @@ package replay
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -365,6 +367,10 @@ func (e *Engine) fire(ctx context.Context, v model.Variant) model.Response {
 		body = body[:e.MaxBody]
 	}
 	resp.Body = body
+	if len(body) > 0 {
+		sum := sha256.Sum256(body)
+		resp.BodySHA256 = hex.EncodeToString(sum[:])
+	}
 	if cl := httpResp.Header.Get("Content-Length"); cl != "" {
 		if n, err := strconv.ParseInt(cl, 10, 64); err == nil {
 			resp.BodySize = n

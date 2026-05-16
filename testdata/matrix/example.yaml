@@ -16,6 +16,9 @@ identities:
     rank: 0
 
   # A standard end user — authenticates via cookie + API key header.
+  # markers (D20): strings unique to alice's account data. When a variant
+  # body sent as a different identity contains any of these, the detector
+  # treats it as a near-certain IDOR.
   - name: alice
     role: standard-user
     rank: 10
@@ -24,6 +27,9 @@ identities:
         session: "s%3Aalice-session-abc123"
       headers:
         X-Api-Key: "alice-key-xyz"
+    markers:
+      - "alice@example.com"
+      - "Alice Liddell"
 
   # A peer of alice — used to test horizontal access (IDOR).
   - name: bob
@@ -31,6 +37,9 @@ identities:
     rank: 10
     creds:
       bearer: "eyJhbGciOiJIUzI1NiI...bob-token"
+    markers:
+      - "bob@example.com"
+      - "Bob Roberts"
 
   # The admin — used to test vertical access (privesc).
   - name: admin
@@ -40,6 +49,8 @@ identities:
       basic:
         username: admin
         password: "hunter2"
+    markers:
+      - "admin@example.com"
     # Tier-1 refresh: P2 will issue this request and inject the extracted
     # value into every subsequent admin replay.
     refresh:

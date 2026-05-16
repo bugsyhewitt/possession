@@ -45,6 +45,7 @@ type rawIdentity struct {
 	Rank    int             `yaml:"rank"`
 	Creds   *rawCredentials `yaml:"creds"`
 	Refresh *rawRefresh     `yaml:"refresh"`
+	Markers []string        `yaml:"markers"`
 }
 
 type rawCredentials struct {
@@ -140,9 +141,10 @@ func toMatrix(rm raw) (*model.RoleMatrix, error) {
 
 	for _, ri := range rm.Identities {
 		ident := model.Identity{
-			Name: ri.Name,
-			Role: ri.Role,
-			Rank: ri.Rank,
+			Name:    ri.Name,
+			Role:    ri.Role,
+			Rank:    ri.Rank,
+			Markers: ri.Markers,
 		}
 		if ri.Creds != nil {
 			ident.Creds = &model.Credentials{

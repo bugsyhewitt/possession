@@ -20,6 +20,26 @@ revisited.
 | D13 | Refresh extraction selector is minimal dotted-path                      | Supports `$.a.b.c` and `$.a[0].b` only. No wildcards, filters, or recursive descent. Small surface area means small bug surface; full JSONPath is overkill for refresh hooks. |
 | D14 | `scan` is self-contained                                                | Runs parse → normalize → scope filter → variant gen → replay in one process. Avoids re-piping `parse --json` into a separate replay tool. |
 | D15 | Per-host token-bucket limiter + bounded concurrency + adaptive backoff  | Default 10 req/s/host, concurrency 5. 429/503 honors Retry-After then falls back to exponential 1s/2s/4s, up to 3 retries then errored. `--no-limit` requires a loud warning. Implemented with `golang.org/x/time/rate`. |
+| D16 | Pluggable Evaluator interface; ship ComparativeEvaluator only for v1.0   | Realizes D4. One implementation now (Autorize-style: replay-as-self baseline vs replay-as-other comparison) with a clean interface so a future AssertionEvaluator (AuthMatrix-style declarative expectations) can drop in without rework. |
+| D17 | Capture-owner attribution by credential match                            | For each CapturedRequest, match its auth components against the matrix identities (bearer/cookie/header/basic-username). First match wins; ties broken by (rank asc, name asc) with a recorded warning. No match falls back to highest-rank identity with attribution `fallback-highest-rank`. Reuses mutate's auth-component heuristic; no reimplementation. |
+| D18 | Calibrated baseline — owner self-replay fired N times                    | Default `--baseline-samples 3`, clamped 1..10. Mean pairwise similarity sets per-endpoint stability. Endpoints with stability < `NoisyEndpointThreshold` (0.70) are flagged `noisy` and all verdicts capped at `suspected`. Per-endpoint `effThreshold = stability - SimilarityMargin`, clamped to `[MinThreshold, 1.0]`. N=1 skips calibration with `DefaultThreshold=0.90` and emits an endpoint note. Baseline-not-2xx ⇒ all variants on that endpoint are `inconclusive` with a loud per-endpoint warning. |
+| D19 | Four verdicts: bypass, suspected, enforced, inconclusive                 | `bypass` = high-confidence finding. `suspected` = medium, needs review. `enforced` = authz is working, no finding. `inconclusive` = couldn't judge (refresh failure, transport error, baseline failure). Findings emitted only for `bypass` and `suspected`. |
+| D20 | Optional per-identity `markers` in role matrix                           | Additive YAML schema: each identity may declare a `markers` list of strings that uniquely identify that identity's data (email, account id, display name). When present, `reflectedOwner` (variant body contains the *resource owner's* marker) is the strongest bypass signal; `reflectedActor` (variant body contains *only the acting identity's own* marker) is a strong benign signal. No markers ⇒ those signals are inert. |
+| D21 | drop-cookie one-at-a-time; strip-token bearer vs csrf stays separate     | No combined `drop-all-cookies` or `drop-bearer-and-csrf` variants. Each variant isolates exactly one auth component so any resulting bypass attributes cleanly to that component. Combined cases inflate variant counts without adding diagnostic value. |
+| D22 | ASVS v5.0.0 chapter V8 (Authorization) for control mapping               | NOT v4.0.x. IDs emitted in `v5.0.0-8.2.2` form. Fixed mapping by Finding.Class: authn-bypass⇒8.3.1, idor⇒8.2.2, idor-cross-tenant⇒8.4.1+8.2.2, privesc⇒8.2.1, auth-dependency⇒8.3.1. Suspected verdicts drop severity one notch (critical→high, high→medium, low→info). |
+| D23 | All tuning constants live in internal/detect/tuning.go                   | Every threshold, weight, regex, volatile-key list, and ASVS map is declared in one file with comments marking them as calibration starting points. Zero magic numbers anywhere else under internal/detect/. Makes calibration a one-file diff. |
+
+## Gate-D additive shape changes for Packet 3
+
+Three additive changes to Packet-1/Packet-2 public types that Packet 3 introduces:
+
+1. **model.Endpoint** gains `OwnerIdentity *Identity` and `OwnerAttribution string` fields (D17 attribution). Existing zero values remain valid.
+2. **model.Response** gains `BodySHA256 string` field, always populated by the replay engine for any non-empty body. Existing consumers ignore the new field.
+3. **model.Identity** gains `Markers []string` (D20). Optional; existing matrices that omit it parse identically.
+
+Plus model.Variant.Mutation.Class is now populated (by the evaluator, not by Packet-2 mutators — keeps the mutator code frozen).
+
+Plus model.Finding and model.Evidence are filled out per §5 of the Packet 3 brief.
 
 ## D7 override note (audit trail)
 

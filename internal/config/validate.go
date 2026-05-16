@@ -72,6 +72,12 @@ func Validate(m *model.RoleMatrix) error {
 				v.add("%s.creds must contain at least one of cookies/headers/bearer/basic", prefix)
 			}
 		}
+		// markers (D20): optional; if present, each must be non-empty.
+		for j, mk := range id.Markers {
+			if mk == "" {
+				v.add("%s.markers[%d] must be non-empty", prefix, j)
+			}
+		}
 		if id.Refresh != nil {
 			for j, ex := range id.Refresh.Extract {
 				exPrefix := fmt.Sprintf("%s.refresh.extract[%d]", prefix, j)

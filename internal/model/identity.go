@@ -17,6 +17,13 @@ type Identity struct {
 	Rank    int
 	Creds   *Credentials // nil ⇒ no auth
 	Refresh *RefreshHook // nil ⇒ no Tier-1 refresh
+
+	// Markers (D20) are optional unique strings identifying this identity's
+	// data — email, account id, display name. When present, the detection
+	// stage uses them as the strongest IDOR signal: a variant body containing
+	// the resource owner's marker is a near-certain bypass. Empty by default
+	// for backward compatibility.
+	Markers []string
 }
 
 // Credentials groups the static authentication material attached to an

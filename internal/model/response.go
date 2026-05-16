@@ -18,4 +18,9 @@ type Response struct {
 	DurationMS   int64       `json:"duration_ms"`
 	Err          string      `json:"err,omitempty"`
 	Inconclusive bool        `json:"inconclusive,omitempty"`
+
+	// BodySHA256 is the hex-encoded sha256 of the (possibly truncated) body.
+	// Populated by the replay engine for any non-empty body; empty when
+	// Body is empty. Lets downstream consumers compare bodies cheaply.
+	BodySHA256 string `json:"body_sha256,omitempty"`
 }
