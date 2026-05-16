@@ -1,0 +1,5 @@
+curl -X POST 'https://api.example.com/api/users/42/orders' \
+  -H 'Content-Type: application/json' \
+  -H 'X-Api-Key: alice-key-xyz' \
+  -b 'session=s%3Aalice-session-abc123' \
+  --data '{"sku":"widget","qty":2}'

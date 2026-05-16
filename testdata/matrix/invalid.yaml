@@ -1,0 +1,34 @@
+# Deliberately broken matrix for negative-path tests.
+# - duplicate identity name "alice"
+# - refresh.extract[0].from uses an invalid enum value
+version: "1"
+target:
+  base_url: "https://api.example.com"
+identities:
+  - name: alice
+    role: standard-user
+    rank: 10
+    creds:
+      bearer: "alice"
+  - name: alice
+    role: standard-user
+    rank: 10
+    creds:
+      bearer: "alice2"
+    refresh:
+      request:
+        method: GET
+        url: "https://api.example.com/account"
+      extract:
+        - name: csrf
+          from: NOT-A-VALID-SOURCE
+          expr: "$.csrfToken"
+          inject:
+            into: header
+            key: X-CSRF-Token
+scope:
+  include: ["/api/**"]
+settings:
+  rate_per_host: 10
+  concurrency: 5
+  timeout: 15s

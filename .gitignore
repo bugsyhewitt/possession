@@ -1,0 +1,14 @@
+# Binaries
+/possession
+/dist/
+
+# Test/coverage output
+*.out
+*.test
+coverage.txt
+
+# Editor
+.idea/
+.vscode/
+*.swp
+.DS_Store

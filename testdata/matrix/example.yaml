@@ -1,0 +1,70 @@
+# Example possession role-matrix. Fully commented reference document.
+#
+# version: schema version. Currently must be "1".
+version: "1"
+
+# target: coarse description of the system under test.
+target:
+  base_url: "https://api.example.com"
+
+# identities: who we will replay each baseline request as. Order matters
+# only for stable output; uniqueness is on `name`.
+identities:
+  # The unauthenticated case. Used for authn-bypass tests.
+  - name: anon
+    role: unauthenticated
+    rank: 0
+
+  # A standard end user — authenticates via cookie + API key header.
+  - name: alice
+    role: standard-user
+    rank: 10
+    creds:
+      cookies:
+        session: "s%3Aalice-session-abc123"
+      headers:
+        X-Api-Key: "alice-key-xyz"
+
+  # A peer of alice — used to test horizontal access (IDOR).
+  - name: bob
+    role: standard-user
+    rank: 10
+    creds:
+      bearer: "eyJhbGciOiJIUzI1NiI...bob-token"
+
+  # The admin — used to test vertical access (privesc).
+  - name: admin
+    role: administrator
+    rank: 100
+    creds:
+      basic:
+        username: admin
+        password: "hunter2"
+    # Tier-1 refresh: P2 will issue this request and inject the extracted
+    # value into every subsequent admin replay.
+    refresh:
+      request:
+        method: GET
+        url: "https://api.example.com/account"
+      extract:
+        - name: csrf
+          from: body-json
+          expr: "$.csrfToken"
+          inject:
+            into: header
+            key: X-CSRF-Token
+
+# scope: glob filters applied to the path of every captured request.
+scope:
+  include:
+    - "/api/**"
+  exclude:
+    - "/api/health"
+    - "**/*.js"
+
+# settings: replay engine controls (P2+).
+settings:
+  rate_per_host: 10
+  concurrency: 5
+  timeout: 15s
+  follow_redirects: false
