@@ -32,4 +32,13 @@ type RunSettings struct {
 	Concurrency     int
 	Timeout         time.Duration
 	FollowRedirects bool
+
+	// MaxVariants caps total variant generation (D11). 0 ⇒ engine default.
+	MaxVariants int
+	// MaxBody caps response body retention in bytes (D12). 0 ⇒ engine default.
+	MaxBody int64
+	// Insecure disables TLS verification (lab-only, loud warning).
+	Insecure bool
+	// NoLimit disables the per-host rate limiter (loud warning).
+	NoLimit bool
 }

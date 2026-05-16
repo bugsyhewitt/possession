@@ -14,8 +14,12 @@ type Mutation struct {
 // Variant is a single replay candidate: a baseline request, the identity it
 // will be replayed as, and the mutation applied.
 //
-// TODO(packet-2): Variant is constructed by the replay engine.
+// ID is a deterministic 16-hex-char prefix of
+// sha256(endpoint_key + mutator + identity_name + canonical_detail_json)
+// (see D11). Same inputs ⇒ same ID across runs. Identity may be nil for
+// mutators like strip-auth.
 type Variant struct {
+	ID       string
 	Base     *CapturedRequest
 	Identity *Identity
 	Mutation Mutation
