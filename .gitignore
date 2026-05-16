@@ -12,3 +12,7 @@ coverage.txt
 .vscode/
 *.swp
 .DS_Store
+
+# Per-session PRD working area + tool settings
+/MEMORY/
+/.claude/
