@@ -39,6 +39,41 @@ func (ev ComparativeEvaluator) judge(vr VariantResponse, owner *model.Identity, 
 	r := vr.Response
 	vv := VariantVerdict{Variant: v, Response: r}
 
+	// Pre-ladder filter: a swap-identity or downgrade-role variant whose
+	// actor is the endpoint's own owner is literally the baseline anchor
+	// (D9). It cannot constitute a bypass — the owner reading their own
+	// data is benign by definition. Skip the ladder; mark enforced with a
+	// note so summary counts stay honest. Without this filter, alice-as-alice
+	// trivially trips reflectedOwner on every endpoint, producing a swarm
+	// of false positives on properly-secured apps.
+	if v != nil && owner != nil && v.Identity != nil && v.Identity.Name == owner.Name {
+		switch v.Mutation.Type {
+		case "swap-identity", "downgrade-role":
+			vv.Verdict = VerdictEnforced
+			vv.Confidence = 0
+			vv.Notes = append(vv.Notes, "same-identity replay (baseline anchor) — not a bypass candidate")
+			return vv
+		}
+	}
+
+	// Pre-ladder filter: swap-identity findings should fire only for
+	// horizontal swaps (actor.Rank == owner.Rank). A higher-rank actor
+	// (e.g. admin) reading the owner's data is a designed-in override per
+	// the matrix, not an IDOR — and `downgrade-role` is the dedicated
+	// mutator for the vertical-escalation case in the other direction.
+	// Without this filter, every admin swap-identity variant against an
+	// owner-attributed endpoint trips reflectedOwner. Per §5.2: "swap-
+	// identity (different identity, **same rank**)".
+	if v != nil && owner != nil && v.Identity != nil &&
+		v.Mutation.Type == "swap-identity" && v.Identity.Rank != owner.Rank {
+		vv.Verdict = VerdictEnforced
+		vv.Confidence = 0
+		vv.Notes = append(vv.Notes,
+			fmt.Sprintf("cross-rank swap-identity (actor rank %d vs owner rank %d) — not an IDOR per §5.2",
+				v.Identity.Rank, owner.Rank))
+		return vv
+	}
+
 	// Branch 3 (also short-circuits before any signal work): refresh
 	// failure from Packet 2 already marked the response Inconclusive.
 	if r != nil && r.Inconclusive {
