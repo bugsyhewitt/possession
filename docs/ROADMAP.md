@@ -1,8 +1,8 @@
 # Roadmap
 
-possession ships in four packets, then a v1.0 release.
+possession shipped v1.0.0 in four packets. v1.1 backlog follows.
 
-## Packet 1 — Foundation (this packet)
+## Packet 1 — Foundation (shipped)
 
 - HAR + curl parsers.
 - Path templating + endpoint dedup.
@@ -10,39 +10,84 @@ possession ships in four packets, then a v1.0 release.
 - CLI scaffold (cobra): `parse`, `scan` (stub), `version`.
 - Test data, unit tests, CI.
 
-## Packet 2 — Replay engine
+## Packet 2 — Replay engine (shipped)
 
 - HTTP client with per-host rate limiting, bounded concurrency,
   configurable timeout, optional redirect following.
-- Variant production: strip-auth, swap-identity-{cookies,headers,bearer,basic},
-  swap-host (when scoped), method-tamper.
+- Variant production: strip-auth, swap-identity, downgrade-role,
+  drop-cookie, strip-token.
 - Per-identity Tier-1 refresh hooks: issue refresh request, extract via
   body-json / body-regex / header / cookie, inject into subsequent replays.
 - Response type with status, headers, body (size-capped), timing.
-- Wire `scan` command end-to-end (still without detection — emit raw
-  variant/response JSON).
+- End-to-end `scan` with structured JSON output.
 
-## Packet 3 — Detection evaluator
+## Packet 3 — Detection evaluator (shipped)
 
-- Implement `detect.Evaluator` (interface seam already in place).
-- Heuristics: status-code-class match, content similarity, size delta,
-  authn-bypass (variant succeeds with no auth), privesc (lower-rank
-  identity gets a higher-rank-only resource), IDOR (peer identity gets
-  another user's resource), auth-dependency.
-- Findings with confidence + severity + ASVS control refs.
+- `detect.Evaluator` interface + `ComparativeEvaluator` implementation.
+- Owner attribution, calibrated baseline, six signals, ten-branch
+  verdict ladder.
+- Findings with confidence + severity + ASVS V8 control refs.
+- Integration corpus (vulnapp + secureapp) with Gate E enforcement.
 
-## Packet 4 — JWT + reporting + v1.0
+## Packet 4 — JWT + reporting + v1.0 (shipped)
 
-- JWT helpers: alg=none, kid injection, weak-secret crack hooks,
-  expiration / audience tampering.
-- Reporters: human table (existing), JSON (existing), SARIF (for
-  GitHub code scanning), HTML (for human consumption).
-- Polish, docs, v1.0 release.
+- Four JWT mutators: jwt-alg-none, jwt-sig-strip, jwt-claim-tamper,
+  jwt-resign-weak-key.
+- `internal/jwt` helper package (lenient detect/decode, malformed-token
+  encode).
+- Three reporters: human (default), json, sarif (SARIF 2.1.0).
+- Carried-over cleanups: D28 (cross-rank cap), D29 (typed
+  EndpointNote), D30 (single-source Mutation.Class).
+- Release prep: README, CHANGELOG, examples, cross-compile Makefile.
 
 ## v1.1 backlog
 
-- Full stateful login flows (multi-step, CSRF chains).
-- AuthMatrix-style declarative evaluator.
-- SAML / OAuth flows.
-- Deep JWT attacks (kid-SQLi, JKU/JWK spoofing).
-- Postman + OpenAPI input formats.
+Items deliberately left out of v1.0 to keep the scope bounded:
+
+### Detection / evaluator
+- AuthMatrix-style declarative evaluator (the `Evaluator` interface
+  seam in `internal/detect/evaluator.go` is ready for it).
+- Activate `idor-cross-tenant` (D31): add a per-identity `tenant`
+  field to the role-matrix schema so the dormant code path can fire.
+- Distinguish "denied" from "different resource" at the low-similarity
+  end of the ladder (current v1.0 limitation, see branch 10 of
+  `internal/detect/evaluate.go`).
+- Statistical retry: re-issue inconclusive variants once before
+  reporting.
+
+### JWT (deeper attacks)
+- RS256→HS256 alg-confusion (sign attacker key with server's public
+  key as HMAC secret).
+- `kid` injection (path traversal, SQL injection, command injection
+  via the `kid` header).
+- JKU / x5u / JWK spoofing (point the verifier at attacker-controlled
+  JWKS).
+- HMAC secret cracking against captured tokens (offline dictionary +
+  rule-based mutation).
+
+### Input formats
+- Postman collection v2 parser.
+- OpenAPI 3.x parser (synthesize requests from schema + examples).
+- mitmproxy flow files.
+
+### Auth flows
+- Multi-step / stateful login flows (CSRF chains, OTP, redirect-heavy
+  OAuth code-grant captures).
+- SAML assertion mutators.
+- OAuth2 PKCE / state mutators.
+
+### Reporting
+- HTML reporter (offline interactive view with collapsible signal
+  traces).
+- Markdown reporter for PR comments.
+- Suppression / baseline file (`possession.allowlist`) so re-runs only
+  surface new findings.
+
+### Operational
+- Resume on interrupt (persist plan + completed variants to disk).
+- Replay-from-recording mode for offline re-evaluation without
+  re-hitting the target.
+- ASVS V9 (Self-Contained Tokens) control mapping once IDs are
+  verified against the published v5.0.0 spec (Gate F — currently
+  omitted intentionally).
+- Branch protection / signed releases (post-v1.0 ops).

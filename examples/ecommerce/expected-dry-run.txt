@@ -1,0 +1,25 @@
+dry-run plan: 2 endpoints, 18 variants, 3 baseline samples per endpoint
+
+ENDPOINT                                       OWNER       ATTRIBUTION              BASELINES
+GET shop.example.test/api/account              alice       exact-bearer             3
+GET shop.example.test/api/orders/{id}          alice       exact-bearer             3
+
+ID                METHOD  MUTATION         IDENTITY     URL
+5acc8785d63202f7  GET     strip-auth       -           https://shop.example.test/api/account
+b5644ca2c37a4e7c  GET     swap-identity    anon        https://shop.example.test/api/account
+493287a29b96df3a  GET     swap-identity    alice       https://shop.example.test/api/account
+7b407bbfd6fab997  GET     swap-identity    bob         https://shop.example.test/api/account
+b4a62312688f854a  GET     swap-identity    admin       https://shop.example.test/api/account
+0c4bdc3513b9331b  GET     downgrade-role   anon        https://shop.example.test/api/account
+a55a33c9dea6cf24  GET     downgrade-role   alice       https://shop.example.test/api/account
+7325badc9e452d69  GET     downgrade-role   bob         https://shop.example.test/api/account
+f43eb4d8ff5daf4c  GET     strip-token      -           https://shop.example.test/api/account
+5ca6f97afdc74276  GET     strip-auth       -           https://shop.example.test/api/orders/12345
+2f0dcb428876e113  GET     swap-identity    anon        https://shop.example.test/api/orders/12345
+7196e7e23e728fd4  GET     swap-identity    alice       https://shop.example.test/api/orders/12345
+7742531ec0d1cca5  GET     swap-identity    bob         https://shop.example.test/api/orders/12345
+936d4fb1a12dbc3d  GET     swap-identity    admin       https://shop.example.test/api/orders/12345
+bf0315b4d8f38243  GET     downgrade-role   anon        https://shop.example.test/api/orders/12345
+a20d9f872073e84b  GET     downgrade-role   alice       https://shop.example.test/api/orders/12345
+8303b8f07bfbf4fc  GET     downgrade-role   bob         https://shop.example.test/api/orders/12345
+0cb66e0bf1487d34  GET     strip-token      -           https://shop.example.test/api/orders/12345

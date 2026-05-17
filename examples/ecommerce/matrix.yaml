@@ -1,0 +1,48 @@
+# Example role matrix for the bundled `capture.har` ecommerce capture.
+# Three identities (alice, bob, admin) + anon, each with a bearer token
+# the demo httptest server in cmd/possession-demo recognizes.
+
+version: "1"
+
+target:
+  base_url: "https://shop.example.test"
+
+identities:
+  - name: anon
+    role: unauthenticated
+    rank: 0
+
+  - name: alice
+    role: customer
+    rank: 10
+    creds:
+      bearer: "alice-bearer-token"
+    markers:
+      - "alice@example.com"
+      - "Alice Liddell"
+
+  - name: bob
+    role: customer
+    rank: 10
+    creds:
+      bearer: "bob-bearer-token"
+    markers:
+      - "bob@example.com"
+      - "Bob Roberts"
+
+  - name: admin
+    role: administrator
+    rank: 100
+    creds:
+      bearer: "admin-bearer-token"
+    markers:
+      - "admin@example.com"
+
+scope:
+  include:
+    - "/api/**"
+
+settings:
+  rate_per_host: 50
+  concurrency: 5
+  timeout: 10s
