@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +20,7 @@ import (
 	"github.com/bugsyhewitt/possession/internal/normalize"
 	"github.com/bugsyhewitt/possession/internal/parse"
 	"github.com/bugsyhewitt/possession/internal/replay"
+	"github.com/bugsyhewitt/possession/internal/report"
 )
 
 var (
@@ -36,6 +36,8 @@ var (
 	scanDryRun          bool
 	scanBaselineSamples int
 	scanMinConfidence   float64
+	scanReport          string
+	scanExitZero        bool
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -67,6 +69,10 @@ func init() {
 		"owner self-replay samples per endpoint for calibration (clamped 1..10)")
 	scanCmd.Flags().Float64Var(&scanMinConfidence, "min-confidence", 0.0,
 		"omit findings with confidence below this from the findings array (summary still counts them)")
+	scanCmd.Flags().StringVar(&scanReport, "report", "human",
+		"output format: human | json | sarif")
+	scanCmd.Flags().BoolVar(&scanExitZero, "exit-zero", false,
+		"exit 0 even when findings are present (useful in CI pipelines that gate elsewhere)")
 }
 
 func resetScanFlags() {
@@ -82,6 +88,8 @@ func resetScanFlags() {
 	scanDryRun = false
 	scanBaselineSamples = detect.DefaultBaselineSamples
 	scanMinConfidence = 0.0
+	scanReport = "human"
+	scanExitZero = false
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -328,20 +336,25 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// custom mutators that don't set Class will simply emit empty class
 	// in JSON — which is correct (they don't produce findings).
 
-	out := buildResultDoc(matrix, endpoints, plan, responses, start, end, rs, buildResultExtras{
-		Baselines:         baselineMap,
-		BaselineSamples:   baselineSamples,
-		EndpointReports:   endpointReports,
-		Findings:          allFindings,
-		Summary:           summaryView{
-			Verdicts:         verdictCounts,
-			NoisyEndpoints:   noisyCount,
-			ByClass:          byClass,
-			BySeverity:       bySeverity,
-			TotalFindings:    len(allFindings),
+	runResult := buildRunResult(matrix, endpoints, plan, responses, start, end, rs, buildResultExtras{
+		Baselines:       baselineMap,
+		BaselineSamples: baselineSamples,
+		EndpointReports: endpointReports,
+		Findings:        allFindings,
+		Summary: summaryView{
+			Verdicts:       verdictCounts,
+			NoisyEndpoints: noisyCount,
+			ByClass:        byClass,
+			BySeverity:     bySeverity,
+			TotalFindings:  len(allFindings),
 		},
 		AttributionWarnings: attributionWarnings,
 	})
+
+	reporter, err := report.New(scanReport)
+	if err != nil {
+		return fmt.Errorf("scan: %w", err)
+	}
 
 	w := cmd.OutOrStdout()
 	if scanOut != "" {
@@ -352,10 +365,27 @@ func runScan(cmd *cobra.Command, args []string) error {
 		defer fh.Close()
 		w = fh
 	}
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	return enc.Encode(out)
+	if err := reporter.Render(runResult, w); err != nil {
+		return fmt.Errorf("scan: render %s: %w", reporter.Name(), err)
+	}
+
+	// Exit code 3 when findings present and --exit-zero not set. Cobra
+	// wraps RunE errors as exit 1, so we use a typed exitError that
+	// main.go inspects to produce the correct code.
+	if len(allFindings) > 0 && !scanExitZero {
+		return &ExitError{Code: 3, Msg: fmt.Sprintf("%d finding(s) reported", len(allFindings))}
+	}
+	return nil
 }
+
+// ExitError signals a non-zero exit code distinct from cobra's default 1.
+// main.go checks for this type and propagates the embedded code.
+type ExitError struct {
+	Code int
+	Msg  string
+}
+
+func (e *ExitError) Error() string { return e.Msg }
 
 // attributeEndpoints fills in OwnerIdentity and OwnerAttribution on each
 // endpoint and returns any ambiguity warnings to surface at run level.
@@ -442,47 +472,12 @@ func endpointKeyOfVariant(v *model.Variant) string {
 	return v.Base.Method + " " + host + tmpl
 }
 
-// --- output shapes ---
-
-type runMeta struct {
-	BaseURL         string            `json:"base_url,omitempty"`
-	TotalEndpoints  int               `json:"total_endpoints"`
-	TotalVariants   int               `json:"total_variants"`
-	GeneratedTotal  int               `json:"variants_generated_before_cap"`
-	Capped          bool              `json:"capped"`
-	Settings        runSetView        `json:"settings"`
-	Start           time.Time         `json:"start"`
-	End             time.Time         `json:"end"`
-	BaselineSamples int               `json:"baseline_samples"`
-	Baselines       map[string]string `json:"baselines,omitempty"`
-}
-
-type runSetView struct {
-	RatePerHost   float64 `json:"rate_per_host"`
-	Concurrency   int     `json:"concurrency"`
-	MaxVariants   int     `json:"max_variants"`
-	MaxBody       int64   `json:"max_body"`
-	Timeout       string  `json:"timeout"`
-	NoLimit       bool    `json:"no_limit"`
-	Insecure      bool    `json:"insecure"`
-	MinConfidence float64 `json:"min_confidence"`
-}
-
-type variantView struct {
-	ID          string            `json:"id"`
-	EndpointKey string            `json:"endpoint_key"`
-	Method      string            `json:"method"`
-	URL         string            `json:"url"`
-	Mutation    string            `json:"mutation"`
-	Class       string            `json:"class,omitempty"`
-	Identity    string            `json:"identity,omitempty"`
-	Detail      map[string]string `json:"detail,omitempty"`
-}
-
-type resultEntry struct {
-	Variant  variantView    `json:"variant"`
-	Response model.Response `json:"response"`
-}
+// --- internal aggregation shapes ---
+//
+// These local types live alongside the model.RunResult types and are
+// used to collect per-endpoint stats before the reporter render. They
+// shadow the model side so the scan loop doesn't have to know about the
+// model package's JSON tags or the typed EndpointNote mirror.
 
 type endpointReport struct {
 	Key                string                `json:"key"`
@@ -502,20 +497,11 @@ type endpointReport struct {
 }
 
 type summaryView struct {
-	Verdicts       map[string]int `json:"verdicts"`
-	NoisyEndpoints int            `json:"noisy_endpoints"`
-	ByClass        map[string]int `json:"by_class"`
-	BySeverity     map[string]int `json:"by_severity"`
-	TotalFindings  int            `json:"total_findings"`
-}
-
-type resultDoc struct {
-	Run                 runMeta          `json:"run"`
-	Endpoints           []endpointReport `json:"endpoints"`
-	Results             []resultEntry    `json:"results"`
-	Findings            []model.Finding  `json:"findings"`
-	Summary             summaryView      `json:"summary"`
-	AttributionWarnings []string         `json:"attribution_warnings,omitempty"`
+	Verdicts       map[string]int
+	NoisyEndpoints int
+	ByClass        map[string]int
+	BySeverity     map[string]int
+	TotalFindings  int
 }
 
 type buildResultExtras struct {
@@ -527,10 +513,15 @@ type buildResultExtras struct {
 	AttributionWarnings []string
 }
 
-func buildResultDoc(matrix *model.RoleMatrix, endpoints []*model.Endpoint, plan replay.Plan,
-	responses []model.Response, start, end time.Time, rs model.RunSettings, extras buildResultExtras) resultDoc {
-	doc := resultDoc{
-		Run: runMeta{
+// buildRunResult composes the model.RunResult that the reporter layer
+// renders. It bridges the local endpointReport / summaryView types
+// (kept for backward-compat with the legacy JSON shape) into the
+// model.RunResult aggregate added in P4.
+func buildRunResult(matrix *model.RoleMatrix, endpoints []*model.Endpoint, plan replay.Plan,
+	responses []model.Response, start, end time.Time, rs model.RunSettings, extras buildResultExtras) *model.RunResult {
+
+	out := &model.RunResult{
+		Run: model.RunMeta{
 			BaseURL:         matrix.Target.BaseURL,
 			TotalEndpoints:  len(endpoints),
 			TotalVariants:   len(plan.Variants),
@@ -540,7 +531,8 @@ func buildResultDoc(matrix *model.RoleMatrix, endpoints []*model.Endpoint, plan 
 			End:             end,
 			BaselineSamples: extras.BaselineSamples,
 			Baselines:       extras.Baselines,
-			Settings: runSetView{
+			ToolVersion:     buildVersion,
+			Settings: model.RunSetView{
 				RatePerHost:   rs.RatePerHost,
 				Concurrency:   rs.Concurrency,
 				MaxVariants:   rs.MaxVariants,
@@ -551,12 +543,47 @@ func buildResultDoc(matrix *model.RoleMatrix, endpoints []*model.Endpoint, plan 
 				MinConfidence: scanMinConfidence,
 			},
 		},
-		Endpoints:           extras.EndpointReports,
-		Findings:            extras.Findings,
-		Summary:             extras.Summary,
+		Findings: extras.Findings,
+		Summary: model.RunSummary{
+			Verdicts:       extras.Summary.Verdicts,
+			NoisyEndpoints: extras.Summary.NoisyEndpoints,
+			ByClass:        extras.Summary.ByClass,
+			BySeverity:     extras.Summary.BySeverity,
+			TotalFindings:  extras.Summary.TotalFindings,
+		},
 		AttributionWarnings: extras.AttributionWarnings,
 	}
-	doc.Results = make([]resultEntry, 0, len(plan.Variants))
+
+	// Convert local endpointReport → model.EndpointReport, copying typed
+	// notes into the model-side mirror struct (model can't import detect
+	// without cycling).
+	out.Endpoints = make([]model.EndpointReport, 0, len(extras.EndpointReports))
+	for _, ep := range extras.EndpointReports {
+		mer := model.EndpointReport{
+			Key:                ep.Key,
+			Method:             ep.Method,
+			Host:               ep.Host,
+			PathTemplate:       ep.PathTemplate,
+			Owner:              ep.Owner,
+			OwnerAttribution:   ep.OwnerAttribution,
+			BaselineSamples:    ep.BaselineSamples,
+			BaselineStatus:     ep.BaselineStatus,
+			Stability:          ep.Stability,
+			EffThreshold:       ep.EffThreshold,
+			Noisy:              ep.Noisy,
+			CalibrationSkipped: ep.CalibrationSkipped,
+			BaselineFailed:     ep.BaselineFailed,
+		}
+		for _, n := range ep.Notes {
+			mer.Notes = append(mer.Notes, model.EndpointNote{
+				Code: string(n.Code), Message: n.Message, Payload: n.Payload,
+			})
+		}
+		out.Endpoints = append(out.Endpoints, mer)
+	}
+
+	// Convert each (variant, response) into model.ResultEntry.
+	out.Results = make([]model.ResultEntry, 0, len(plan.Variants))
 	for i, v := range plan.Variants {
 		var resp model.Response
 		if i < len(responses) {
@@ -570,8 +597,8 @@ func buildResultDoc(matrix *model.RoleMatrix, endpoints []*model.Endpoint, plan 
 		if v.Base != nil && v.Base.URL != nil {
 			urlStr = v.Base.URL.String()
 		}
-		doc.Results = append(doc.Results, resultEntry{
-			Variant: variantView{
+		out.Results = append(out.Results, model.ResultEntry{
+			Variant: model.VariantView{
 				ID:          v.ID,
 				EndpointKey: endpointKeyOfVariant(&plan.Variants[i]),
 				Method:      v.Base.Method,
@@ -584,7 +611,7 @@ func buildResultDoc(matrix *model.RoleMatrix, endpoints []*model.Endpoint, plan 
 			Response: resp,
 		})
 	}
-	return doc
+	return out
 }
 
 func writeDryRun(w io.Writer, plan replay.Plan, endpoints []*model.Endpoint, baselineSamples int) error {
