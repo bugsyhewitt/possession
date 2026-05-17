@@ -261,9 +261,10 @@ func runScan(cmd *cobra.Command, args []string) error {
 		}
 		allFindings = append(allFindings, filteredFindings...)
 
-		// Per-endpoint notes — start with calibration notes, add refresh
-		// failures detected in the variant responses for this endpoint.
-		notes := append([]string{}, cal.Notes...)
+		// Per-endpoint notes — typed enum per D29. Start with calibration
+		// notes, then layer on refresh failures and min-confidence omissions
+		// observed at this scope.
+		notes := append([]detect.EndpointNote{}, cal.Notes...)
 		refreshFailedFor := map[string]struct{}{}
 		for _, vr := range vrs {
 			if vr.Response != nil && vr.Response.Inconclusive && vr.Variant != nil && vr.Variant.Identity != nil {
@@ -276,10 +277,10 @@ func runScan(cmd *cobra.Command, args []string) error {
 		}
 		sort.Strings(names)
 		for _, n := range names {
-			notes = append(notes, "refresh-failed: identity "+n+" variants marked inconclusive")
+			notes = append(notes, detect.NewNote(detect.NoteRefreshFailed, map[string]string{"identity": n}))
 		}
 		if omittedByMinConf > 0 {
-			notes = append(notes, fmt.Sprintf("min-confidence: %d finding(s) omitted from array (still counted in summary)", omittedByMinConf))
+			notes = append(notes, detect.NewNote(detect.NoteMinConfidence, map[string]string{"omitted": strconv.Itoa(omittedByMinConf)}))
 		}
 
 		owner := ""
@@ -322,11 +323,10 @@ func runScan(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Populate Mutation.Class on every variant so the JSON output sees it
-	// even for non-finding variants (Gate-D additive #3).
-	for i := range plan.Variants {
-		plan.Variants[i].Mutation.Class = detect.MutatorClass(plan.Variants[i].Mutation.Type)
-	}
+	// D30: Mutation.Class is set by each mutator at variant generation;
+	// no re-derivation here. Variants from baseline-self or future
+	// custom mutators that don't set Class will simply emit empty class
+	// in JSON — which is correct (they don't produce findings).
 
 	out := buildResultDoc(matrix, endpoints, plan, responses, start, end, rs, buildResultExtras{
 		Baselines:         baselineMap,
@@ -485,20 +485,20 @@ type resultEntry struct {
 }
 
 type endpointReport struct {
-	Key                string   `json:"key"`
-	Method             string   `json:"method"`
-	Host               string   `json:"host"`
-	PathTemplate       string   `json:"path_template"`
-	Owner              string   `json:"owner,omitempty"`
-	OwnerAttribution   string   `json:"owner_attribution,omitempty"`
-	BaselineSamples    int      `json:"baseline_samples"`
-	BaselineStatus     int      `json:"baseline_status"`
-	Stability          float64  `json:"stability"`
-	EffThreshold       float64  `json:"eff_threshold"`
-	Noisy              bool     `json:"noisy"`
-	CalibrationSkipped bool     `json:"calibration_skipped"`
-	BaselineFailed     bool     `json:"baseline_failed"`
-	Notes              []string `json:"notes,omitempty"`
+	Key                string                `json:"key"`
+	Method             string                `json:"method"`
+	Host               string                `json:"host"`
+	PathTemplate       string                `json:"path_template"`
+	Owner              string                `json:"owner,omitempty"`
+	OwnerAttribution   string                `json:"owner_attribution,omitempty"`
+	BaselineSamples    int                   `json:"baseline_samples"`
+	BaselineStatus     int                   `json:"baseline_status"`
+	Stability          float64               `json:"stability"`
+	EffThreshold       float64               `json:"eff_threshold"`
+	Noisy              bool                  `json:"noisy"`
+	CalibrationSkipped bool                  `json:"calibration_skipped"`
+	BaselineFailed     bool                  `json:"baseline_failed"`
+	Notes              []detect.EndpointNote `json:"notes,omitempty"`
 }
 
 type summaryView struct {

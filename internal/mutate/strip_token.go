@@ -41,6 +41,7 @@ func (StripToken) Generate(base *model.CapturedRequest, _ *model.RoleMatrix) []m
 				Type:        "strip-token",
 				Description: "remove bearer token, keep cookies",
 				Detail:      map[string]string{"removed": "bearer"},
+				Class:       "auth-dependency",
 			},
 		})
 	}
@@ -55,6 +56,7 @@ func (StripToken) Generate(base *model.CapturedRequest, _ *model.RoleMatrix) []m
 				Type:        "strip-token",
 				Description: "remove CSRF header(s), keep cookies",
 				Detail:      map[string]string{"removed": strings.Join(csrfHeaders, ",")},
+				Class:       "auth-dependency",
 			},
 		})
 	}

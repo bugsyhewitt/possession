@@ -193,7 +193,10 @@ func TestAuthHeaderConstants(t *testing.T) {
 
 func TestRegistry_DeclarationOrder(t *testing.T) {
 	r := DefaultRegistry()
-	want := []string{"strip-auth", "swap-identity", "downgrade-role", "drop-cookie", "strip-token"}
+	want := []string{
+		"strip-auth", "swap-identity", "downgrade-role", "drop-cookie", "strip-token",
+		"jwt-alg-none", "jwt-sig-strip", "jwt-claim-tamper", "jwt-resign-weak-key",
+	}
 	got := r.Names()
 	if len(got) != len(want) {
 		t.Fatalf("name count: want %d got %d", len(want), len(got))

@@ -22,6 +22,7 @@ func (StripAuth) Generate(base *model.CapturedRequest, _ *model.RoleMatrix) []mo
 			Type:        "strip-auth",
 			Description: "remove all credentials (headers + cookies + basic)",
 			Detail:      map[string]string{},
+			Class:       "authn-bypass",
 		},
 	}}
 }

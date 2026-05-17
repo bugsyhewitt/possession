@@ -43,6 +43,7 @@ func (DropCookie) Generate(base *model.CapturedRequest, _ *model.RoleMatrix) []m
 				Type:        "drop-cookie",
 				Description: "remove auth cookie " + name,
 				Detail:      map[string]string{"removed_cookie": name},
+				Class:       "auth-dependency",
 			},
 		})
 	}

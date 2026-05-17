@@ -1,7 +1,12 @@
 package detect
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"hash"
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
@@ -102,6 +107,24 @@ func startVulnApp(t *testing.T) *httptest.Server {
 		writeJSON(w, 200, fmt.Sprintf(`{"items":[%q]}`, strings.Join(picks, ",")))
 	})
 
+	// jwt: vulnerable JWT endpoint that accepts alg=none. Returns alice's
+	// data based on the `sub` claim. Used to verify that JWT mutators
+	// (jwt-alg-none) trigger an authn-bypass finding.
+	mux.HandleFunc("/jwt", func(w http.ResponseWriter, r *http.Request) {
+		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		sub := vulnableJWTSub(bearer)
+		if sub == "" {
+			writeJSON(w, 401, `{"error":"missing or unparseable jwt"}`)
+			return
+		}
+		body, ok := users[sub]
+		if !ok {
+			writeJSON(w, 404, `{"error":"not found"}`)
+			return
+		}
+		writeJSON(w, 200, body)
+	})
+
 	// softdeny: 200 with a body that errorSignature will catch.
 	mux.HandleFunc("/softdeny", func(w http.ResponseWriter, r *http.Request) {
 		// Owner gets the real page; anyone else (or no auth) gets the soft-deny page.
@@ -191,6 +214,24 @@ func startSecureApp(t *testing.T) *httptest.Server {
 		}
 		noisyMu2.Unlock()
 		writeJSON(w, 200, fmt.Sprintf(`{"items":[%s]}`, strings.Join(picks, ",")))
+	})
+
+	// jwt: secure endpoint that REJECTS alg=none and stripped sigs.
+	// Verifies HS256 against a real secret. Used to assert Gate E: zero
+	// bypass findings on the JWT corpus for a properly-implemented verifier.
+	mux.HandleFunc("/jwt", func(w http.ResponseWriter, r *http.Request) {
+		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		sub, ok := secureJWTVerify(bearer)
+		if !ok {
+			writeJSON(w, 401, `{"error":"invalid jwt"}`)
+			return
+		}
+		body, found := users[sub]
+		if !found {
+			writeJSON(w, 404, `{"error":"not found"}`)
+			return
+		}
+		writeJSON(w, 200, body)
 	})
 
 	// Softdeny in secureapp returns proper 403.
@@ -517,4 +558,232 @@ func stripScheme(u string) string {
 	u = strings.TrimPrefix(u, "https://")
 	u = strings.TrimPrefix(u, "http://")
 	return u
+}
+
+// ─── JWT corpus helpers ───────────────────────────────────────────────
+
+// vulnableJWTSub parses a JWT leniently and returns the `sub` claim
+// without verifying the signature. This intentionally mirrors the
+// classic "we forgot to verify" bug.
+func vulnableJWTSub(token string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	cb, err := base64URLDecode(parts[1])
+	if err != nil {
+		return ""
+	}
+	var m map[string]any
+	if err := jsonDecode(cb, &m); err != nil {
+		return ""
+	}
+	if s, ok := m["sub"].(string); ok {
+		return s
+	}
+	return ""
+}
+
+// secureJWTSecret is the HMAC secret the secureapp verifier expects.
+// Mutators don't know it; jwt-resign-weak-key tries common defaults
+// like "secret"/"password" — none of which match this value.
+const secureJWTSecret = "S3cure-LongRandomServerSecret-NotInWeakHMACList-9f3b2c"
+
+// secureJWTVerify validates the JWT's HS256 signature against
+// secureJWTSecret AND requires alg=HS256 (rejects alg=none). Returns
+// the sub claim on success.
+func secureJWTVerify(token string) (string, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 || parts[2] == "" {
+		return "", false
+	}
+	hb, err := base64URLDecode(parts[0])
+	if err != nil {
+		return "", false
+	}
+	var hdr map[string]any
+	if err := jsonDecode(hb, &hdr); err != nil {
+		return "", false
+	}
+	if alg, _ := hdr["alg"].(string); alg != "HS256" {
+		return "", false
+	}
+	mac := hmacSHA256([]byte(secureJWTSecret), []byte(parts[0]+"."+parts[1]))
+	got, err := base64URLDecode(parts[2])
+	if err != nil || !hmacEqual(mac, got) {
+		return "", false
+	}
+	cb, err := base64URLDecode(parts[1])
+	if err != nil {
+		return "", false
+	}
+	var claims map[string]any
+	if err := jsonDecode(cb, &claims); err != nil {
+		return "", false
+	}
+	if s, ok := claims["sub"].(string); ok {
+		return s, true
+	}
+	return "", false
+}
+
+func base64URLDecode(s string) ([]byte, error) {
+	s = strings.TrimRight(s, "=")
+	return base64.RawURLEncoding.DecodeString(s)
+}
+
+func jsonDecode(b []byte, dst *map[string]any) error {
+	return json.Unmarshal(b, dst)
+}
+
+func hmacSHA256(key, msg []byte) []byte {
+	var h hash.Hash = hmac.New(sha256.New, key)
+	h.Write(msg)
+	return h.Sum(nil)
+}
+
+func hmacEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	var v byte
+	for i := range a {
+		v |= a[i] ^ b[i]
+	}
+	return v == 0
+}
+
+// ─── JWT corpus tests ─────────────────────────────────────────────────
+
+// matrixForJWTServer builds a matrix where alice carries a real signed
+// JWT as her bearer token. This makes jwt.Detect find a token on the
+// captured request so the JWT mutators have something to chew on.
+// bob/admin carry plain string tokens — they don't enable JWT detection
+// on their own variants, but swap-identity variants still use them.
+func matrixForJWTServer(base string) (*model.RoleMatrix, string) {
+	aliceJWT := encodeHS256(map[string]any{"alg": "HS256", "typ": "JWT"},
+		map[string]any{"sub": "alice", "role": "user"}, secureJWTSecret)
+	return &model.RoleMatrix{
+		Version: "1",
+		Target:  model.TargetConfig{BaseURL: base},
+		Identities: []model.Identity{
+			{Name: "anon", Role: "unauthenticated", Rank: 0},
+			{Name: "alice", Role: "user", Rank: 10,
+				Markers: []string{"alice@example.com", "Alice Liddell"},
+				Creds:   &model.Credentials{Bearer: aliceJWT}},
+		},
+	}, aliceJWT
+}
+
+// encodeHS256 is the corpus-local convenience matching the secure
+// verifier — keeps tests self-contained without importing the mutator
+// package.
+func encodeHS256(header, claims map[string]any, secret string) string {
+	hb, _ := json.Marshal(header)
+	cb, _ := json.Marshal(claims)
+	eh := base64.RawURLEncoding.EncodeToString(hb)
+	ec := base64.RawURLEncoding.EncodeToString(cb)
+	sig := base64.RawURLEncoding.EncodeToString(hmacSHA256([]byte(secret), []byte(eh+"."+ec)))
+	return eh + "." + ec + "." + sig
+}
+
+// runJWTCorpus mirrors runCorpus but uses matrixForJWTServer and
+// fabricates the captured request with the alice JWT bearer.
+func runJWTCorpus(t *testing.T, srv *httptest.Server) (allFindings []model.Finding, verdictCounts map[string]int) {
+	matrix, aliceJWT := matrixForJWTServer(srv.URL)
+
+	u, _ := url.Parse(srv.URL + "/jwt")
+	h := http.Header{}
+	h.Set("Authorization", "Bearer "+aliceJWT)
+	h.Set("Accept", "application/json")
+	cap := &model.CapturedRequest{
+		ID: "GET /jwt", Method: "GET", URL: u, PathTemplate: "/jwt",
+		Headers: h,
+	}
+	ep := &model.Endpoint{
+		Method: "GET", Host: cap.URL.Host, PathTemplate: "/jwt",
+		Samples: []*model.CapturedRequest{cap},
+	}
+	owner, attr, _ := AttributeOwner(ep.Samples[0], matrix)
+	ep.OwnerIdentity = owner
+	ep.OwnerAttribution = attr
+
+	const baselineN = 3
+	baselinePlan := buildBaselinePlanLocal([]*model.Endpoint{ep}, baselineN)
+	reg := mutate.DefaultRegistry()
+	plan := replay.Generate([]*model.Endpoint{ep}, matrix, reg, 0)
+	rs := model.RunSettings{RatePerHost: 1000, Concurrency: 8, MaxBody: 1024 * 1024}
+	engine := replay.New(rs, "possession-jwt-corpus-test", nil)
+	ctx := t.Context()
+	baselineResp := engine.Run(ctx, baselinePlan)
+	variantResp := engine.Run(ctx, plan)
+
+	byKey := map[string][]*model.Response{}
+	for i, v := range baselinePlan.Variants {
+		key := variantEndpointKey(&v)
+		r := baselineResp[i]
+		byKey[key] = append(byKey[key], &r)
+	}
+	cal := Calibrate(byKey[ep.Method+" "+ep.Host+ep.PathTemplate])
+	var vrs []VariantResponse
+	for i, v := range plan.Variants {
+		if variantEndpointKey(&v) != ep.Method+" "+ep.Host+ep.PathTemplate {
+			continue
+		}
+		r := variantResp[i]
+		vrs = append(vrs, VariantResponse{Variant: &plan.Variants[i], Response: &r})
+	}
+	verdictCounts = map[string]int{}
+	res := ComparativeEvaluator{}.Evaluate(EvalContext{
+		Endpoint: ep, Owner: ep.OwnerIdentity, Calibration: cal,
+		VariantResponses: vrs, Matrix: matrix,
+	})
+	for _, vv := range res.Verdicts {
+		verdictCounts[vv.Verdict]++
+	}
+	return res.Findings, verdictCounts
+}
+
+// TestCorpus_VulnApp_JWT_AlgNoneBypass: the vulnapp /jwt accepts
+// alg=none. We expect AT LEAST one bypass finding from the JWT mutators
+// (alg-none or sig-strip will get through, return alice's data,
+// reflectedOwner triggers).
+func TestCorpus_VulnApp_JWT_AlgNoneBypass(t *testing.T) {
+	srv := startVulnApp(t)
+	defer srv.Close()
+	findings, verdictCounts := runJWTCorpus(t, srv)
+	jwtBypass := 0
+	for _, f := range findings {
+		if f.Verdict != VerdictBypass {
+			continue
+		}
+		if strings.HasPrefix(f.Mutation, "jwt-") {
+			jwtBypass++
+		}
+	}
+	if jwtBypass == 0 {
+		t.Errorf("vulnapp /jwt: expected at least one JWT-mutator bypass; got verdictCounts=%v findings:\n%s",
+			verdictCounts, summarizeFindings(findings))
+	}
+	t.Logf("vulnapp /jwt: %d JWT-mutator bypasses, verdictCounts=%v", jwtBypass, verdictCounts)
+}
+
+// TestCorpus_SecureApp_JWT_ZeroBypass — Gate E for the JWT endpoint.
+// The secure /jwt rejects alg=none and verifies HS256 with a strong
+// secret. No JWT mutator should yield a bypass.
+func TestCorpus_SecureApp_JWT_ZeroBypass(t *testing.T) {
+	srv := startSecureApp(t)
+	defer srv.Close()
+	findings, verdictCounts := runJWTCorpus(t, srv)
+	bypassCount := 0
+	for _, f := range findings {
+		if f.Verdict == VerdictBypass {
+			bypassCount++
+		}
+	}
+	if bypassCount > 0 {
+		t.Errorf("secureapp /jwt Gate E FAILED: %d bypass(es):\n%s",
+			bypassCount, summarizeFindings(findings))
+	}
+	t.Logf("secureapp /jwt: zero bypass; verdictCounts=%v findings=%d", verdictCounts, len(findings))
 }

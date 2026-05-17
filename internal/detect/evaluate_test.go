@@ -219,3 +219,57 @@ func TestLadder_AmbiguousPenalty(t *testing.T) {
 		t.Errorf("ambiguous penalty should reduce confidence below BaseHigh; got %v", vv.Confidence)
 	}
 }
+
+// TestLadder_D28_CrossRankSwapCappedAtSuspected — D28.
+// When a swap-identity variant uses an actor whose rank differs from the
+// endpoint owner's rank, any bypass verdict from the ladder is capped at
+// suspected with a typed cross-rank-swap note. Same-identity is still
+// short-circuited (Filter A); same-rank cross-identity is unaffected.
+func TestLadder_D28_CrossRankSwapCappedAtSuspected(t *testing.T) {
+	owner := &model.Identity{Name: "alice", Rank: 10}
+	admin := &model.Identity{Name: "admin", Rank: 100}
+	body := `{"id":"alice","email":"alice@example.com","items":["a","b","c","d","e","f","g","h"]}`
+	cal := mkCal(NormalizeBody([]byte(body), "application/json"), 200, false, false, false, 0.85)
+	vr := mkVR("swap-identity", admin, 200, body, "application/json", false, "")
+	vv := runLadder(t, cal, owner, vr)
+	if vv.Verdict != VerdictSuspected {
+		t.Errorf("D28: cross-rank swap should cap at suspected, got %s notes=%v", vv.Verdict, vv.Notes)
+	}
+	// Note must mention cross-rank-swap.
+	found := false
+	for _, n := range vv.Notes {
+		if contains(n, "cross-rank-swap") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("D28: cross-rank-swap note missing; notes=%v", vv.Notes)
+	}
+}
+
+// TestLadder_D28_SameRankSwapUnchanged — verify same-rank swap is NOT
+// capped (still bypass when the ladder says bypass).
+func TestLadder_D28_SameRankSwapUnchanged(t *testing.T) {
+	owner := &model.Identity{Name: "alice", Rank: 10}
+	bob := &model.Identity{Name: "bob", Rank: 10}
+	body := `{"id":"alice","email":"alice@example.com","items":["a","b","c","d","e","f","g","h"]}`
+	cal := mkCal(NormalizeBody([]byte(body), "application/json"), 200, false, false, false, 0.85)
+	vr := mkVR("swap-identity", bob, 200, body, "application/json", false, "")
+	vv := runLadder(t, cal, owner, vr)
+	if vv.Verdict != VerdictBypass {
+		t.Errorf("D28: same-rank swap should remain bypass, got %s", vv.Verdict)
+	}
+}
+
+func contains(haystack, needle string) bool {
+	return len(haystack) >= len(needle) && (haystack == needle || indexOf(haystack, needle) >= 0)
+}
+func indexOf(haystack, needle string) int {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return i
+		}
+	}
+	return -1
+}

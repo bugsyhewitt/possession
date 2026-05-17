@@ -39,6 +39,7 @@ func (DowngradeRole) Generate(base *model.CapturedRequest, m *model.RoleMatrix) 
 					"downgraded_to": ident.Name,
 					"from_owner":    owner.Name,
 				},
+				Class: "privesc",
 			},
 		})
 	}

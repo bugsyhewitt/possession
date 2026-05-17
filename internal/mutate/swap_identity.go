@@ -26,6 +26,7 @@ func (SwapIdentity) Generate(base *model.CapturedRequest, m *model.RoleMatrix) [
 				Type:        "swap-identity",
 				Description: "replay as identity " + ident.Name,
 				Detail:      map[string]string{"swapped_to": ident.Name},
+				Class:       "idor",
 			},
 		})
 	}

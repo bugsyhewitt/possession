@@ -27,7 +27,7 @@ type CalibrationResult struct {
 	BaselineCT      string  // content-type of the first sample (for normalization of variants)
 	Skipped         bool    // true when N=1 (calibration skipped, DefaultThreshold applied)
 	BaselineFailed  bool    // true when first sample's status is not 2xx ⇒ all variants inconclusive
-	Notes           []string // machine-readable per-endpoint notes (calibration-skipped, etc.)
+	Notes           []EndpointNote // typed per-endpoint notes (D29)
 }
 
 // Calibrate computes the per-endpoint calibration from N owner-baseline
@@ -42,7 +42,7 @@ func Calibrate(samples []*model.Response) CalibrationResult {
 	res := CalibrationResult{Samples: len(samples)}
 	if len(samples) == 0 {
 		res.BaselineFailed = true
-		res.Notes = append(res.Notes, "baseline-missing: no owner samples fired")
+		res.Notes = append(res.Notes, NewNote(NoteBaselineNot2xx, map[string]string{"reason": "no owner samples fired"}))
 		res.EffThreshold = DefaultThreshold
 		return res
 	}
@@ -56,7 +56,7 @@ func Calibrate(samples []*model.Response) CalibrationResult {
 	}
 	if first == nil || first.Status < 200 || first.Status >= 300 {
 		res.BaselineFailed = true
-		res.Notes = append(res.Notes, "baseline-not-2xx: owner self-replay returned non-success; variants for this endpoint inconclusive")
+		res.Notes = append(res.Notes, NewNote(NoteBaselineNot2xx, nil))
 		res.EffThreshold = DefaultThreshold
 		return res
 	}
@@ -65,7 +65,7 @@ func Calibrate(samples []*model.Response) CalibrationResult {
 		res.Skipped = true
 		res.Stability = 1.0
 		res.EffThreshold = DefaultThreshold
-		res.Notes = append(res.Notes, "calibration-skipped: N=1, using DefaultThreshold")
+		res.Notes = append(res.Notes, NewNote(NoteCalibrationSkipped, nil))
 		return res
 	}
 
@@ -96,7 +96,7 @@ func Calibrate(samples []*model.Response) CalibrationResult {
 	}
 	if res.Stability < NoisyEndpointThreshold {
 		res.Noisy = true
-		res.Notes = append(res.Notes, "noisy-endpoint: baseline stability below threshold; verdicts capped at suspected")
+		res.Notes = append(res.Notes, NewNote(NoteNoisyEndpoint, nil))
 	}
 	t := res.Stability - SimilarityMargin
 	if t < MinThreshold {

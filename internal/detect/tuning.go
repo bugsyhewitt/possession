@@ -198,9 +198,14 @@ var DowngradeSeverity = map[string]string{
 // ─── mutator → finding class mapping (§5.2) ───────────────────────────
 
 // MutatorClass returns the canonical finding Class for a mutator's
-// Type field. swap-identity normally maps to "idor"; the cross-tenant
-// branch is dormant in v1.0 (no tenant markers in matrix yet) but the
-// code path is wired so a future matrix extension picks it up.
+// Type field. Under D30 mutators set Class at generation time; this
+// helper is the fallback path for callers building variants directly
+// (e.g. baseline-self in scan.go, tests).
+//
+// JWT mutators (P4) generally set their own Class because it depends on
+// the specific mutation (e.g. jwt-claim-tamper with role/admin claims
+// is privesc, with sub/email claims is authn-bypass). The defaults below
+// are the bypass-shaped fallback for tokens with no contextual claim.
 func MutatorClass(mutatorType string) string {
 	switch mutatorType {
 	case "strip-auth":
@@ -211,7 +216,15 @@ func MutatorClass(mutatorType string) string {
 		return "privesc"
 	case "drop-cookie", "strip-token":
 		return "auth-dependency"
+	case "jwt-alg-none", "jwt-sig-strip", "jwt-resign-weak-key":
+		return "authn-bypass"
+	case "jwt-claim-tamper":
+		return "privesc" // fallback; mutator sets the per-variant class
 	default:
 		return ""
 	}
 }
+
+// JWT tuning constants live in internal/mutate/jwt_tuning.go to avoid
+// an import cycle (detect imports mutate for the auth-component
+// heuristic, so mutate cannot import detect).

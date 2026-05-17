@@ -23,6 +23,7 @@ func (ev ComparativeEvaluator) Evaluate(ctx EvalContext) EvalResult {
 	cal := ctx.Calibration
 	for _, vr := range ctx.VariantResponses {
 		vv := ev.judge(vr, ctx.Owner, cal)
+		vv = applyCrossRankCap(vv, vr.Variant, ctx.Owner)
 		out.Verdicts = append(out.Verdicts, vv)
 
 		if vv.Verdict == VerdictBypass || vv.Verdict == VerdictSuspected {
@@ -31,6 +32,32 @@ func (ev ComparativeEvaluator) Evaluate(ctx EvalContext) EvalResult {
 		}
 	}
 	return out
+}
+
+// applyCrossRankCap implements D28: a swap-identity variant where the
+// acting identity's rank differs from the endpoint owner's rank is
+// downgraded — bypass becomes suspected, the verdict carries a typed
+// cross-rank-swap note, and confidence is dampened. Suspected stays
+// suspected (no further downgrade), enforced/inconclusive untouched.
+// Same-rank swaps and non-swap mutators pass through unchanged.
+func applyCrossRankCap(vv VariantVerdict, v *model.Variant, owner *model.Identity) VariantVerdict {
+	if v == nil || owner == nil || v.Identity == nil {
+		return vv
+	}
+	if v.Mutation.Type != "swap-identity" || v.Identity.Rank == owner.Rank {
+		return vv
+	}
+	if vv.Verdict != VerdictBypass && vv.Verdict != VerdictSuspected {
+		return vv
+	}
+	if vv.Verdict == VerdictBypass {
+		vv.Verdict = VerdictSuspected
+		vv.Confidence *= AmbiguousPenalty
+	}
+	vv.Notes = append(vv.Notes,
+		fmt.Sprintf("cross-rank-swap: actor rank %d vs owner rank %d — capped at suspected (D28)",
+			v.Identity.Rank, owner.Rank))
+	return vv
 }
 
 // judge is the §4.4 verdict ladder — first match wins.
@@ -56,23 +83,11 @@ func (ev ComparativeEvaluator) judge(vr VariantResponse, owner *model.Identity, 
 		}
 	}
 
-	// Pre-ladder filter: swap-identity findings should fire only for
-	// horizontal swaps (actor.Rank == owner.Rank). A higher-rank actor
-	// (e.g. admin) reading the owner's data is a designed-in override per
-	// the matrix, not an IDOR — and `downgrade-role` is the dedicated
-	// mutator for the vertical-escalation case in the other direction.
-	// Without this filter, every admin swap-identity variant against an
-	// owner-attributed endpoint trips reflectedOwner. Per §5.2: "swap-
-	// identity (different identity, **same rank**)".
-	if v != nil && owner != nil && v.Identity != nil &&
-		v.Mutation.Type == "swap-identity" && v.Identity.Rank != owner.Rank {
-		vv.Verdict = VerdictEnforced
-		vv.Confidence = 0
-		vv.Notes = append(vv.Notes,
-			fmt.Sprintf("cross-rank swap-identity (actor rank %d vs owner rank %d) — not an IDOR per §5.2",
-				v.Identity.Rank, owner.Rank))
-		return vv
-	}
+	// D28: cross-rank swap-identity is NOT short-circuited here. The
+	// ladder runs as normal; applyCrossRankCap (called by Evaluate after
+	// judge) downgrades bypass→suspected with a typed cross-rank-swap
+	// note. This keeps the ladder pure and the policy decision in one
+	// auditable place.
 
 	// Branch 3 (also short-circuits before any signal work): refresh
 	// failure from Packet 2 already marked the response Inconclusive.

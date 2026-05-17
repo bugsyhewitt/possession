@@ -14,11 +14,15 @@ import (
 // side effect — Gate-D additive). Severity comes from SeverityByClass
 // and is downgraded one notch for `suspected` verdicts (§5.3).
 func BuildFinding(ep *model.Endpoint, v *model.Variant, r *model.Response, vv VariantVerdict, cal CalibrationResult) model.Finding {
+	// D30: read class from the variant; mutators set it at generation
+	// time. Fall back to MutatorClass for variants produced before D30
+	// (e.g. baseline-self) where Class is intentionally empty.
 	class := ""
 	if v != nil {
-		class = MutatorClass(v.Mutation.Type)
-		// Populate the variant's Class field as the §6 additive change.
-		v.Mutation.Class = class
+		class = v.Mutation.Class
+		if class == "" {
+			class = MutatorClass(v.Mutation.Type)
+		}
 	}
 
 	severity := SeverityByClass[class]

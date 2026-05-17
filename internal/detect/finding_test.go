@@ -19,7 +19,10 @@ func TestBuildFinding_ClassMapping(t *testing.T) {
 	}
 	ep := &model.Endpoint{Method: "GET", Host: "h", PathTemplate: "/x"}
 	for _, c := range cases {
-		v := &model.Variant{ID: "v1", Mutation: model.Mutation{Type: c.mutator}}
+		// D30: Class is set at mutator generation time. BuildFinding reads
+		// it; tests must seed it on the input variant. We still verify the
+		// fallback path (empty Class on input ⇒ MutatorClass lookup) below.
+		v := &model.Variant{ID: "v1", Mutation: model.Mutation{Type: c.mutator, Class: c.class}}
 		r := &model.Response{Status: 200}
 		vv := VariantVerdict{Verdict: VerdictBypass, Confidence: 0.9}
 		cal := mkCal("baseline", 200, false, false, false, 0.85)
@@ -27,10 +30,22 @@ func TestBuildFinding_ClassMapping(t *testing.T) {
 		if f.Class != c.class {
 			t.Errorf("%s: want class %s got %s", c.mutator, c.class, f.Class)
 		}
-		// Mutation.Class side-effect populated.
-		if v.Mutation.Class != c.class {
-			t.Errorf("%s: Variant.Mutation.Class not populated, got %q", c.mutator, v.Mutation.Class)
-		}
+	}
+}
+
+// TestBuildFinding_FallbackClass verifies the fallback path: when a
+// variant has no Class set, BuildFinding consults MutatorClass(). This
+// preserves correctness for callers that build variants directly without
+// going through the mutator registry (e.g. baseline-self).
+func TestBuildFinding_FallbackClass(t *testing.T) {
+	ep := &model.Endpoint{Method: "GET", Host: "h", PathTemplate: "/x"}
+	v := &model.Variant{ID: "v1", Mutation: model.Mutation{Type: "swap-identity"}}
+	r := &model.Response{Status: 200}
+	vv := VariantVerdict{Verdict: VerdictBypass, Confidence: 0.9}
+	cal := mkCal("baseline", 200, false, false, false, 0.85)
+	f := BuildFinding(ep, v, r, vv, cal)
+	if f.Class != "idor" {
+		t.Errorf("fallback: want idor got %s", f.Class)
 	}
 }
 
