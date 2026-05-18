@@ -118,3 +118,45 @@ Two design notes worth flagging for review:
 ### v1.2 Backlog (see also docs/ROADMAP.md)
 
 SAML assertion mutators, deep OAuth2/OIDC (PKCE, device_code, state CSRF), GraphQL field-level authz, ASVS V9 mapping (Gate F), TUI, Postman/OpenAPI input parsers, privesc-to-different-resource-class detection improvement.
+
+---
+
+## Integration & Release — 2026-05-18
+
+[03:25] INTEGRATION START — pre-merge verification
+[03:25] Gate A PASSED — all 4 branches on origin; chain linear (each branch contains previous packet-0N-complete tag); all merges ff-only capable
+[03:26] MERGE P5→P6→P7→P8 into main — all fast-forwarded cleanly
+[03:27] BUILD OK — go build ./... on integrated main
+[03:27] VET OK — go vet ./... clean
+[03:27] TESTS 10/11 pkgs green; TestCorpus_P7_VulnApp_WriteEndpointIDOR intermittent fail under -race
+[03:28] DIAGNOSIS — data race in applyFlowInjections: fr.vars read outside mutex + shared cookie jar causes cross-identity session bleed
+[03:29] FIX — Engine.flowHTTP (jar-free client for flows); vars copy under mutex; integration hotfix committed (6039f9f)
+[03:30] Gate C PASSED — go test ./... -race -count=5 fully green; all corpus tests pass including secureapp Gate E (zero bypass false positives)
+[03:33] PUSH main to origin — confirmed
+[03:33] CI green for main push (run 26012033305)
+[03:34] CHANGELOG.md v1.1.0 entry written and committed (8a62501)
+[03:35] git tag -a v1.1.0 — possession v1.1.0 confirmed by binary
+[03:35] PUSH main (changelog) + v1.1.0 tag to origin
+[03:35] make release — 5 platform artifacts + SHA256SUMS in dist/
+[03:35] CI green for v1.1.0 tag (run 26012097140) and main (run 26012096911)
+
+### Release artifacts (dist/)
+- possession-v1.1.0-linux-amd64.tar.gz   sha256: 06903def2d7e3a9789e870cdf92cc4e07f24c9d0fe25776f7dbe355ae389de40
+- possession-v1.1.0-linux-arm64.tar.gz   sha256: a4d5b37472d8891f71ce511656bbee59c3d9f9a0c2b508feb892d79b7619346e
+- possession-v1.1.0-darwin-amd64.tar.gz  sha256: 6280bccd9249d40b9d3c8a9d67ad0b4b7856680b1f921fc019230b9f136a26d4
+- possession-v1.1.0-darwin-arm64.tar.gz  sha256: 5b008ba206793e13e90be9cbf4e8857ceb3b0596f882df4379bc8efeb46ca274
+- possession-v1.1.0-windows-amd64.zip    sha256: b41a4e4f6aacac4d4fe06d7b475dc60551049308f1962e98901192222e86068f
+
+### Deviation
+
+One integration hotfix was required before tagging. TestCorpus_P7_VulnApp_WriteEndpointIDOR
+failed intermittently under -race on the integrated main (not visible per-packet because each
+packet tested in isolation). Root cause: Engine.flowHTTP not isolated from the shared cookie
+jar; also a data race in applyFlowInjections (fr.vars read outside mutex). Fix: separate
+jar-free flowHTTP client for all flow execution; vars copy under lock; key-by-key write-back.
+Committed as a separate fix commit (6039f9f) before tagging.
+
+### Manual follow-ups for the human (require repo-admin scope — NOT done)
+1. Publish GitHub Release from v1.1.0 tag with dist/ artifacts and SHA256SUMS
+2. Enable branch protection on main: require PR + green CI before merge
+3. Set repo description/topics if not updated since v1.0
