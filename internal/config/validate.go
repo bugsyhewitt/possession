@@ -112,6 +112,38 @@ func Validate(m *model.RoleMatrix) error {
 		v.add("settings.timeout must be > 0 (got %v)", m.Settings.Timeout)
 	}
 
+	// Validate assertions block (P6).
+	roleSet := make(map[string]struct{}, len(m.Identities))
+	for _, id := range m.Identities {
+		roleSet[id.Role] = struct{}{}
+	}
+	for i, a := range m.Assertions {
+		prefix := fmt.Sprintf("assertions[%d]", i)
+		if a.Endpoint == "" {
+			v.add("%s.endpoint is required", prefix)
+			continue
+		}
+		// Extract the path glob from "METHOD /path/glob" or "/path/glob".
+		parts := strings.SplitN(a.Endpoint, " ", 2)
+		var pathGlob string
+		if len(parts) == 2 {
+			pathGlob = parts[1]
+		} else {
+			pathGlob = parts[0]
+		}
+		if err := validateGlob(pathGlob); err != nil {
+			v.add("%s.endpoint path glob: %v", prefix, err)
+		}
+		for role, outcome := range a.Expect {
+			if _, ok := roleSet[role]; !ok {
+				v.add("%s.expect[%q]: role %q not found in identities", prefix, role, role)
+			}
+			if outcome != "allow" && outcome != "deny" {
+				v.add("%s.expect[%q]: outcome must be \"allow\" or \"deny\" (got %q)", prefix, role, outcome)
+			}
+		}
+	}
+
 	if len(v.Errors) == 0 {
 		return nil
 	}

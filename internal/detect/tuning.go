@@ -220,6 +220,10 @@ func MutatorClass(mutatorType string) string {
 		return "authn-bypass"
 	case "jwt-claim-tamper":
 		return "privesc" // fallback; mutator sets the per-variant class
+	case "jwt-alg-confusion", "jwt-kid-injection", "jwt-jwks-spoof":
+		return "authn-bypass"
+	case "jwt-hmac-crack":
+		return "privesc"
 	default:
 		return ""
 	}
@@ -228,3 +232,17 @@ func MutatorClass(mutatorType string) string {
 // JWT tuning constants live in internal/mutate/jwt_tuning.go to avoid
 // an import cycle (detect imports mutate for the auth-component
 // heuristic, so mutate cannot import detect).
+
+// ─── assertion evaluator (P6) ─────────────────────────────────────────
+
+const (
+	// AssertionBypassConfidence is the confidence for an assertion-derived
+	// bypass finding. High because the expectation is explicit — the
+	// evaluator doesn't need to infer from body similarity.
+	AssertionBypassConfidence = 0.97
+
+	// AssertionBrokenDenyConfidence is the confidence for a broken-deny
+	// finding (access denied but allow expected). Low/info severity to
+	// distinguish it from a real bypass.
+	AssertionBrokenDenyConfidence = 0.50
+)

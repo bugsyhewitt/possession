@@ -12,6 +12,7 @@ type RoleMatrix struct {
 	Identities []Identity
 	Scope      ScopeConfig
 	Settings   RunSettings
+	Assertions []Assertion // optional declarative access expectations (P6)
 }
 
 // TargetConfig describes the system under test at a coarse level.
@@ -36,6 +37,25 @@ type ScopeConfig struct {
 	Include []string
 	Exclude []string
 }
+
+// Assertion defines the expected access model for one endpoint pattern.
+// The Expect map keys are role names; values are "allow" or "deny".
+type Assertion struct {
+	// Endpoint is a "METHOD /path/glob" pattern, e.g. "GET /api/admin/**".
+	Endpoint string
+	// Expect maps role → "allow" | "deny".
+	Expect map[string]string
+}
+
+// AssertionOutcome is the typed result of evaluating one assertion.
+type AssertionOutcome int
+
+const (
+	AssertionMatch   AssertionOutcome = iota // response matches expectation
+	AssertionBypass                          // access granted but deny expected
+	AssertionBroken                          // access denied but allow expected
+	AssertionUnknown                         // no assertion covers this pair
+)
 
 // RunSettings controls replay engine behavior (Packet 2+).
 type RunSettings struct {

@@ -39,6 +39,7 @@ var (
 	scanReport          string
 	scanExitZero        bool
 	scanJWTWordlist     string // path to newline-delimited HMAC secret wordlist
+	scanEvaluator       string // evaluator to use: comparative | assertion | both
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -76,6 +77,8 @@ func init() {
 		"exit 0 even when findings are present (useful in CI pipelines that gate elsewhere)")
 	scanCmd.Flags().StringVar(&scanJWTWordlist, "jwt-wordlist", "",
 		"path to newline-delimited wordlist for jwt-hmac-crack (default: built-in list)")
+	scanCmd.Flags().StringVar(&scanEvaluator, "evaluator", "comparative",
+		"evaluator to use: comparative | assertion | both (default: comparative)")
 }
 
 func resetScanFlags() {
@@ -94,6 +97,7 @@ func resetScanFlags() {
 	scanReport = "human"
 	scanExitZero = false
 	scanJWTWordlist = ""
+	scanEvaluator = "comparative"
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -219,7 +223,10 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	// Detection — per endpoint.
-	ev := detect.ComparativeEvaluator{}
+	ev, err := buildEvaluator(scanEvaluator, matrix)
+	if err != nil {
+		return err
+	}
 	allFindings := []model.Finding{}
 	verdictCounts := map[string]int{
 		detect.VerdictBypass:       0,
@@ -687,6 +694,23 @@ func parseSize(s string) (int64, error) {
 		return 0, fmt.Errorf("size must be >= 0")
 	}
 	return n * mult, nil
+}
+
+// buildEvaluator returns the Evaluator selected by the --evaluator flag.
+func buildEvaluator(name string, matrix *model.RoleMatrix) (detect.Evaluator, error) {
+	switch name {
+	case "comparative", "":
+		return detect.ComparativeEvaluator{}, nil
+	case "assertion":
+		if matrix == nil || len(matrix.Assertions) == 0 {
+			return nil, fmt.Errorf("scan: --evaluator assertion requires an assertions block in the matrix YAML")
+		}
+		return detect.AssertionEvaluator{}, nil
+	case "both":
+		return detect.BothEvaluator{}, nil
+	default:
+		return nil, fmt.Errorf("scan: --evaluator: unknown value %q (want: comparative|assertion|both)", name)
+	}
 }
 
 // buildRegistry returns the default mutator registry, optionally replacing

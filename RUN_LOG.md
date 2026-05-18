@@ -7,4 +7,10 @@
 ## Packet 5 — Deep JWT Attacks
 
 [02:23] P5 START — branch packet-05-deep-jwt
+[02:36] P5 tests green (all 10 packages, -race)
+[02:36] P5 BACKUP ok — tag packet-05-complete pushed, bundle possession-packet-05-20260517-223604.bundle verified
+
+## Packet 6 — Assertion Evaluator
+
+[02:36] P6 START — branch packet-06-assertion-eval
 

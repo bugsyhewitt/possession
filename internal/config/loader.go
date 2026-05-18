@@ -26,13 +26,19 @@ type rawJWT struct {
 	JWKSUrl      string `yaml:"jwks_url"`
 }
 
+type rawAssertion struct {
+	Endpoint string            `yaml:"endpoint"`
+	Expect   map[string]string `yaml:"expect"`
+}
+
 type raw struct {
 	Version    string `yaml:"version"`
 	Target     struct {
 		BaseURL string  `yaml:"base_url"`
 		JWT     *rawJWT `yaml:"jwt"`
 	} `yaml:"target"`
-	Identities []rawIdentity `yaml:"identities"`
+	Identities []rawIdentity  `yaml:"identities"`
+	Assertions []rawAssertion `yaml:"assertions"`
 	Scope      struct {
 		Include []string `yaml:"include"`
 		Exclude []string `yaml:"exclude"`
@@ -195,6 +201,12 @@ func toMatrix(rm raw) (*model.RoleMatrix, error) {
 			ident.Refresh = rh
 		}
 		out.Identities = append(out.Identities, ident)
+	}
+	for _, ra := range rm.Assertions {
+		out.Assertions = append(out.Assertions, model.Assertion{
+			Endpoint: ra.Endpoint,
+			Expect:   ra.Expect,
+		})
 	}
 	return out, nil
 }

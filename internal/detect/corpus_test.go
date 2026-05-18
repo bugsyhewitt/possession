@@ -1164,3 +1164,146 @@ func TestCorpus_SecureApp_P5_HMACCrack_ZeroBypass(t *testing.T) {
 	}
 	t.Logf("secureapp /jwt/hmac-weak: zero bypass; verdictCounts=%v findings=%d", verdictCounts, len(findings))
 }
+
+// ─── P6: Assertion Evaluator corpus tests ─────────────────────────────
+
+// runAssertionCorpus runs the assertion evaluator (or "both") against srv.
+// assertions is embedded in the matrix for the test.
+func runAssertionCorpus(t *testing.T, srv *httptest.Server, evalName string, defs []endpointDef, assertions []model.Assertion) ([]model.Finding, map[string]int) {
+	t.Helper()
+	matrix := matrixForServer(srv.URL)
+	matrix.Assertions = assertions
+
+	var endpoints []*model.Endpoint
+	for _, d := range defs {
+		cap := makeCaptured(d.method, srv.URL, d.path, d.pathTemplate)
+		ep := &model.Endpoint{
+			Method:       d.method,
+			Host:         cap.URL.Host,
+			PathTemplate: d.pathTemplate,
+			Samples:      []*model.CapturedRequest{cap},
+		}
+		endpoints = append(endpoints, ep)
+	}
+	for _, ep := range endpoints {
+		owner, attr, _ := AttributeOwner(ep.Samples[0], matrix)
+		ep.OwnerIdentity = owner
+		ep.OwnerAttribution = attr
+	}
+
+	const baselineN = 3
+	baselinePlan := buildBaselinePlanLocal(endpoints, baselineN)
+	reg := mutate.DefaultRegistry()
+	plan := replay.Generate(endpoints, matrix, reg, 0)
+	rs := model.RunSettings{RatePerHost: 1000, Concurrency: 8, MaxBody: 1024 * 1024}
+	engine := replay.New(rs, "possession-assertion-corpus-test", nil)
+	ctx := t.Context()
+	baselineResp := engine.Run(ctx, baselinePlan)
+	variantResp := engine.Run(ctx, plan)
+
+	byKey := make(map[string][]*model.Response)
+	for i, v := range baselinePlan.Variants {
+		key := variantEndpointKey(&v)
+		r := baselineResp[i]
+		byKey[key] = append(byKey[key], &r)
+	}
+
+	var ev Evaluator
+	switch evalName {
+	case "assertion":
+		ev = AssertionEvaluator{}
+	case "both":
+		ev = BothEvaluator{}
+	default:
+		ev = ComparativeEvaluator{}
+	}
+
+	verdictCounts := map[string]int{}
+	var allFindings []model.Finding
+	for _, ep := range endpoints {
+		key := ep.Method + " " + ep.Host + ep.PathTemplate
+		cal := Calibrate(byKey[key])
+		var vrs []VariantResponse
+		for i, v := range plan.Variants {
+			if variantEndpointKey(&v) != key {
+				continue
+			}
+			r := variantResp[i]
+			vrs = append(vrs, VariantResponse{Variant: &plan.Variants[i], Response: &r})
+		}
+		res := ev.Evaluate(EvalContext{
+			Endpoint:         ep,
+			Owner:            ep.OwnerIdentity,
+			Calibration:      cal,
+			VariantResponses: vrs,
+			Matrix:           matrix,
+		})
+		for _, vv := range res.Verdicts {
+			verdictCounts[vv.Verdict]++
+		}
+		allFindings = append(allFindings, res.Findings...)
+	}
+	return allFindings, verdictCounts
+}
+
+// TestCorpus_P6_AssertionEvaluator_VulnApp_CatchesDenyViolation:
+// /admin/promote is deny for user/unauthenticated; vulnapp returns 200 for
+// everyone → assertion evaluator should flag it as bypass.
+func TestCorpus_P6_AssertionEvaluator_VulnApp_CatchesDenyViolation(t *testing.T) {
+	srv := startVulnApp(t)
+	defer srv.Close()
+
+	assertions := []model.Assertion{
+		{Endpoint: "POST /admin/promote", Expect: map[string]string{
+			"user":            "deny",
+			"unauthenticated": "deny",
+		}},
+	}
+	defs := []endpointDef{
+		{"POST", "/admin/promote", "/admin/promote"},
+	}
+	findings, verdictCounts := runAssertionCorpus(t, srv, "assertion", defs, assertions)
+
+	bypassFound := false
+	for _, f := range findings {
+		if f.Verdict == VerdictBypass {
+			bypassFound = true
+			break
+		}
+	}
+	if !bypassFound {
+		t.Errorf("P6 assertion: expected bypass on vulnapp /admin/promote; verdictCounts=%v findings:\n%s",
+			verdictCounts, summarizeFindings(findings))
+	}
+	t.Logf("P6 assertion vulnapp: verdictCounts=%v findings=%d", verdictCounts, len(findings))
+}
+
+// TestCorpus_P6_AssertionEvaluator_SecureApp_ZeroBypass — Gate E for P6.
+// secureapp /admin/promote is properly restricted; no bypass findings expected.
+func TestCorpus_P6_AssertionEvaluator_SecureApp_ZeroBypass(t *testing.T) {
+	srv := startSecureApp(t)
+	defer srv.Close()
+
+	assertions := []model.Assertion{
+		{Endpoint: "POST /admin/promote", Expect: map[string]string{
+			"user":            "deny",
+			"unauthenticated": "deny",
+			"administrator":   "allow",
+		}},
+	}
+	defs := []endpointDef{
+		{"POST", "/admin/promote", "/admin/promote"},
+	}
+	findings, verdictCounts := runAssertionCorpus(t, srv, "assertion", defs, assertions)
+
+	bypassCount := 0
+	for _, f := range findings {
+		if f.Verdict == VerdictBypass {
+			bypassCount++
+		}
+	}
+	if bypassCount > 0 {
+		t.Errorf("P6 Gate E FAILED: %d bypass(es):\n%s", bypassCount, summarizeFindings(findings))
+	}
+	t.Logf("P6 assertion secureapp: zero bypass; verdictCounts=%v findings=%d", verdictCounts, len(findings))
+}
