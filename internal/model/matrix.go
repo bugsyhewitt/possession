@@ -17,6 +17,17 @@ type RoleMatrix struct {
 // TargetConfig describes the system under test at a coarse level.
 type TargetConfig struct {
 	BaseURL string
+	JWT     *JWTTargetConfig // optional — enables key-dependent JWT attacks (P5)
+}
+
+// JWTTargetConfig holds optional key material for deep JWT attacks.
+// Absent ⇒ attacks that require key material are skipped with a note.
+type JWTTargetConfig struct {
+	// PublicKeyPEM is the PEM-encoded RSA or EC public key used for the
+	// alg-confusion attack (re-sign RS256/ES256 token with pubkey as HMAC secret).
+	PublicKeyPEM string
+	// JWKSUrl is the server's JWKS endpoint URL, used to fetch its public key.
+	JWKSUrl string
 }
 
 // ScopeConfig holds glob patterns that include/exclude request paths from

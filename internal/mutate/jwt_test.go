@@ -158,9 +158,11 @@ func TestJWTMutators_DefaultRegistryOrder(t *testing.T) {
 	reg := DefaultRegistry()
 	names := reg.Names()
 	// JWT mutators must be present AFTER the P2 set, in declaration order.
+	// P4 basics first, then P5 deep attacks.
 	want := []string{
 		"strip-auth", "swap-identity", "downgrade-role", "drop-cookie", "strip-token",
 		"jwt-alg-none", "jwt-sig-strip", "jwt-claim-tamper", "jwt-resign-weak-key",
+		"jwt-alg-confusion", "jwt-kid-injection", "jwt-jwks-spoof", "jwt-hmac-crack",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("want %d mutators, got %d (%v)", len(want), len(names), names)

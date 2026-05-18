@@ -38,6 +38,7 @@ var (
 	scanMinConfidence   float64
 	scanReport          string
 	scanExitZero        bool
+	scanJWTWordlist     string // path to newline-delimited HMAC secret wordlist
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -73,6 +74,8 @@ func init() {
 		"output format: human | json | sarif")
 	scanCmd.Flags().BoolVar(&scanExitZero, "exit-zero", false,
 		"exit 0 even when findings are present (useful in CI pipelines that gate elsewhere)")
+	scanCmd.Flags().StringVar(&scanJWTWordlist, "jwt-wordlist", "",
+		"path to newline-delimited wordlist for jwt-hmac-crack (default: built-in list)")
 }
 
 func resetScanFlags() {
@@ -90,6 +93,7 @@ func resetScanFlags() {
 	scanMinConfidence = 0.0
 	scanReport = "human"
 	scanExitZero = false
+	scanJWTWordlist = ""
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -169,7 +173,10 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// derived from its representative sample's auth components.
 	attributionWarnings := attributeEndpoints(endpoints, matrix)
 
-	reg := mutate.DefaultRegistry()
+	reg, err := buildRegistry(scanJWTWordlist)
+	if err != nil {
+		return err
+	}
 	plan := replay.Generate(endpoints, matrix, reg, scanMaxVariants)
 	if plan.Capped {
 		fmt.Fprintf(stderr,
@@ -680,6 +687,38 @@ func parseSize(s string) (int64, error) {
 		return 0, fmt.Errorf("size must be >= 0")
 	}
 	return n * mult, nil
+}
+
+// buildRegistry returns the default mutator registry, optionally replacing
+// jwt-hmac-crack's wordlist with the contents of wordlistPath.
+func buildRegistry(wordlistPath string) (*mutate.Registry, error) {
+	if wordlistPath == "" {
+		return mutate.DefaultRegistry(), nil
+	}
+	data, err := os.ReadFile(wordlistPath)
+	if err != nil {
+		return nil, fmt.Errorf("scan: --jwt-wordlist: %w", err)
+	}
+	var words []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimRight(line, "\r")
+		words = append(words, line)
+	}
+	return mutate.NewRegistry(
+		mutate.StripAuth{},
+		mutate.SwapIdentity{},
+		mutate.DowngradeRole{},
+		mutate.DropCookie{},
+		mutate.StripToken{},
+		mutate.JWTAlgNone{},
+		mutate.JWTSigStrip{},
+		mutate.JWTClaimTamper{},
+		mutate.JWTResignWeakKey{},
+		mutate.JWTAlgConfusion{},
+		mutate.JWTKidInjection{},
+		mutate.JWTJwksSpoof{},
+		mutate.JWTHmacCrack{Wordlist: words},
+	), nil
 }
 
 // Reference to silence "unused import" for net/http when scan-related code

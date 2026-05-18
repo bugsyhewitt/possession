@@ -141,9 +141,9 @@ func (r *Registry) Names() []string {
 // Get returns the mutator by name, or nil.
 func (r *Registry) Get(name string) Mutator { return r.by[name] }
 
-// DefaultRegistry returns the v1.0 mutator set (D8 + D24) in canonical
-// order. P2 mutators come first (declaration order matches D11); JWT
-// mutators (P4) follow.
+// DefaultRegistry returns the v1.0+v1.1 mutator set in canonical order.
+// P2 mutators first (D8), then P4 JWT basics (D24), then P5 deep JWT
+// attacks. All registered in declaration order per D11.
 func DefaultRegistry() *Registry {
 	return NewRegistry(
 		StripAuth{},
@@ -151,10 +151,16 @@ func DefaultRegistry() *Registry {
 		DowngradeRole{},
 		DropCookie{},
 		StripToken{},
+		// P4: basic JWT attacks
 		JWTAlgNone{},
 		JWTSigStrip{},
 		JWTClaimTamper{},
 		JWTResignWeakKey{},
+		// P5: deep JWT attacks
+		JWTAlgConfusion{},
+		JWTKidInjection{},
+		JWTJwksSpoof{},
+		JWTHmacCrack{},
 	)
 }
 

@@ -169,3 +169,105 @@ func mustURL(t *testing.T, s string) *url.URL {
 	}
 	return u
 }
+
+// ─── P5 deep JWT unit tests ───────────────────────────────────────────
+
+func TestAlgConfusionFromPEM_RejectsNoPEM(t *testing.T) {
+	hdr := map[string]any{"alg": "RS256", "typ": "JWT"}
+	claims := map[string]any{"sub": "alice"}
+	_, err := AlgConfusionFromPEM(hdr, claims, "not-pem-data")
+	if err == nil {
+		t.Fatal("expected error for non-PEM input, got nil")
+	}
+}
+
+func TestAlgConfusionFromPEM_ProducesHS256Token(t *testing.T) {
+	_, pub, err := GenerateAttackerKeyPair()
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	pemStr, err := EncodePKIX(pub)
+	if err != nil {
+		t.Fatalf("encode pem: %v", err)
+	}
+	hdr := map[string]any{"alg": "RS256", "typ": "JWT"}
+	claims := map[string]any{"sub": "alice"}
+	tok, err := AlgConfusionFromPEM(hdr, claims, pemStr)
+	if err != nil {
+		t.Fatalf("alg confusion: %v", err)
+	}
+	h, c, sig, err := Decode(tok)
+	if err != nil {
+		t.Fatalf("decode confused token: %v", err)
+	}
+	if h["alg"] != "HS256" {
+		t.Errorf("expected alg=HS256, got %v", h["alg"])
+	}
+	if c["sub"] != "alice" {
+		t.Errorf("expected sub=alice, got %v", c["sub"])
+	}
+	if sig == "" {
+		t.Error("expected non-empty HMAC signature")
+	}
+}
+
+func TestGenerateAttackerKeyPair_NonNil(t *testing.T) {
+	priv, pub, err := GenerateAttackerKeyPair()
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if priv == nil || pub == nil {
+		t.Fatal("nil key returned")
+	}
+}
+
+func TestEncodeWithRS256_ValidToken(t *testing.T) {
+	priv, _, err := GenerateAttackerKeyPair()
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	hdr := map[string]any{"alg": "RS256", "typ": "JWT"}
+	claims := map[string]any{"sub": "tester"}
+	tok, err := EncodeWithRS256(hdr, claims, priv)
+	if err != nil {
+		t.Fatalf("encode rs256: %v", err)
+	}
+	h, c, sig, err := Decode(tok)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if h["alg"] != "RS256" {
+		t.Errorf("alg: got %v", h["alg"])
+	}
+	if c["sub"] != "tester" {
+		t.Errorf("sub: got %v", c["sub"])
+	}
+	if sig == "" {
+		t.Error("empty signature in RS256 token")
+	}
+}
+
+func TestPublicKeyToJWK_HasRequiredFields(t *testing.T) {
+	_, pub, _ := GenerateAttackerKeyPair()
+	jwk := PublicKeyToJWK(pub, "kid1")
+	for _, field := range []string{"kty", "alg", "use", "kid", "n", "e"} {
+		if _, ok := jwk[field]; !ok {
+			t.Errorf("JWK missing field %q", field)
+		}
+	}
+	if jwk["kty"] != "RSA" {
+		t.Errorf("kty: want RSA got %v", jwk["kty"])
+	}
+}
+
+func TestB64URL_RoundTrip(t *testing.T) {
+	data := []byte("hello world")
+	encoded := B64URL(data)
+	if encoded == "" {
+		t.Fatal("empty encoded")
+	}
+	// Should not contain padding
+	if len(encoded) > 0 && encoded[len(encoded)-1] == '=' {
+		t.Errorf("unexpected padding in %q", encoded)
+	}
+}

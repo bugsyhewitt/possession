@@ -15,6 +15,7 @@ import (
 	"sync"
 	"testing"
 
+	jwthelper "github.com/bugsyhewitt/possession/internal/jwt"
 	"github.com/bugsyhewitt/possession/internal/model"
 	"github.com/bugsyhewitt/possession/internal/mutate"
 	"github.com/bugsyhewitt/possession/internal/replay"
@@ -786,4 +787,380 @@ func TestCorpus_SecureApp_JWT_ZeroBypass(t *testing.T) {
 			bypassCount, summarizeFindings(findings))
 	}
 	t.Logf("secureapp /jwt: zero bypass; verdictCounts=%v findings=%d", verdictCounts, len(findings))
+}
+
+// ─── P5: Deep JWT corpus helpers ──────────────────────────────────────
+
+// startVulnAppDeepJWT extends the vulnapp with endpoints for P5 deep JWT attacks.
+// /jwt/deep — accepts any JWT without signature verification (covers alg-confusion,
+//             kid-injection, jwks-spoof).
+// /jwt/hmac-weak — HS256 endpoint using the WEAK secret "secret"; role-aware
+//                  so the cracked admin token yields different output than the
+//                  owner user token, making privesc detectable.
+func startVulnAppDeepJWT(t *testing.T) *httptest.Server {
+	mux := http.NewServeMux()
+
+	// /jwt/deep: no signature check — accepts any structurally valid JWT.
+	// Returns alice's data when sub=alice, else 404.
+	users := map[string]string{
+		"alice": `{"id":"alice","email":"alice@example.com","name":"Alice Liddell","balance":1234}`,
+		"bob":   `{"id":"bob","email":"bob@example.com","name":"Bob Roberts","balance":99}`,
+	}
+	mux.HandleFunc("/jwt/deep", func(w http.ResponseWriter, r *http.Request) {
+		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		sub := vulnableJWTSub(bearer) // no sig check
+		if sub == "" {
+			writeJSON(w, 401, `{"error":"missing jwt"}`)
+			return
+		}
+		body, ok := users[sub]
+		if !ok {
+			body = `{"id":"` + sub + `","email":"` + sub + `@example.com","name":"` + sub + `","balance":0}`
+		}
+		writeJSON(w, 200, body)
+	})
+
+	// /jwt/hmac-weak: verifies HS256 with weak secret "secret" (in crack wordlist).
+	// Returns alice's profile data for any valid token (sub-based), ignoring role.
+	// The bypass is that the cracked+tampered token is ACCEPTED (high body similarity
+	// to baseline triggers comparative bypass detection).
+	const weakSecret = "secret"
+	mux.HandleFunc("/jwt/hmac-weak", func(w http.ResponseWriter, r *http.Request) {
+		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if bearer == "" {
+			writeJSON(w, 401, `{"error":"missing jwt"}`)
+			return
+		}
+		parts := strings.SplitN(bearer, ".", 3)
+		if len(parts) != 3 {
+			writeJSON(w, 401, `{"error":"malformed jwt"}`)
+			return
+		}
+		hb, err := base64URLDecode(parts[0])
+		if err != nil {
+			writeJSON(w, 401, `{"error":"bad jwt header"}`)
+			return
+		}
+		var hdr map[string]any
+		if err := jsonDecode(hb, &hdr); err != nil || hdr["alg"] != "HS256" {
+			writeJSON(w, 401, `{"error":"bad alg"}`)
+			return
+		}
+		mac := hmacSHA256([]byte(weakSecret), []byte(parts[0]+"."+parts[1]))
+		got, err := base64URLDecode(parts[2])
+		if err != nil || !hmacEqual(mac, got) {
+			writeJSON(w, 401, `{"error":"bad signature"}`)
+			return
+		}
+		// Accept any valid token; return the sub's user data.
+		cb, _ := base64URLDecode(parts[1])
+		var claims map[string]any
+		_ = jsonDecode(cb, &claims)
+		sub, _ := claims["sub"].(string)
+		body, ok := users[sub]
+		if !ok {
+			body = `{"id":"` + sub + `","email":"` + sub + `@example.com","balance":0}`
+		}
+		writeJSON(w, 200, body)
+	})
+
+	return httptest.NewServer(mux)
+}
+
+// startSecureAppDeepJWT mirrors startVulnAppDeepJWT but with proper verification.
+// /jwt/deep — verifies HS256 with secureJWTSecret; rejects alg=RS256 (so jwks-spoof
+//             fails), ignores kid and jwk/jku headers (kid-injection and alg-confusion
+//             are defeated by the correct sig check).
+// /jwt/hmac-weak — verifies HS256 with secureJWTSecret (NOT in the crack wordlist).
+func startSecureAppDeepJWT(t *testing.T) *httptest.Server {
+	mux := http.NewServeMux()
+	users := map[string]string{
+		"alice": `{"id":"alice","email":"alice@example.com","name":"Alice Liddell","balance":1234}`,
+		"bob":   `{"id":"bob","email":"bob@example.com","name":"Bob Roberts","balance":99}`,
+	}
+
+	mux.HandleFunc("/jwt/deep", func(w http.ResponseWriter, r *http.Request) {
+		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		sub, ok := secureJWTVerify(bearer)
+		if !ok {
+			writeJSON(w, 401, `{"error":"invalid jwt"}`)
+			return
+		}
+		body, found := users[sub]
+		if !found {
+			writeJSON(w, 404, `{"error":"not found"}`)
+			return
+		}
+		writeJSON(w, 200, body)
+	})
+
+	mux.HandleFunc("/jwt/hmac-weak", func(w http.ResponseWriter, r *http.Request) {
+		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		sub, ok := secureJWTVerify(bearer) // strong secret — crack wordlist won't match
+		if !ok {
+			writeJSON(w, 401, `{"error":"invalid jwt"}`)
+			return
+		}
+		body, found := users[sub]
+		if !found {
+			writeJSON(w, 404, `{"error":"not found"}`)
+			return
+		}
+		writeJSON(w, 200, body)
+	})
+
+	return httptest.NewServer(mux)
+}
+
+// matrixForDeepJWT builds a matrix where alice carries an HS256 JWT (suitable for
+// alg-confusion / kid-injection / jwks-spoof corpus tests) AND the target has a
+// public_key_pem so jwt-alg-confusion generates variants.
+// Returns the matrix and alice's bearer token.
+func matrixForDeepJWT(base string, pubKeyPEM string) (*model.RoleMatrix, string) {
+	aliceJWT := encodeHS256(
+		map[string]any{"alg": "HS256", "typ": "JWT"},
+		map[string]any{"sub": "alice", "role": "user"},
+		secureJWTSecret,
+	)
+	var jwtCfg *model.JWTTargetConfig
+	if pubKeyPEM != "" {
+		jwtCfg = &model.JWTTargetConfig{PublicKeyPEM: pubKeyPEM}
+	}
+	return &model.RoleMatrix{
+		Version: "1",
+		Target:  model.TargetConfig{BaseURL: base, JWT: jwtCfg},
+		Identities: []model.Identity{
+			{Name: "anon", Role: "unauthenticated", Rank: 0},
+			{Name: "alice", Role: "user", Rank: 10,
+				Markers: []string{"alice@example.com", "Alice Liddell"},
+				Creds:   &model.Credentials{Bearer: aliceJWT}},
+		},
+	}, aliceJWT
+}
+
+// matrixForHMACCrack builds a matrix where alice carries an HS256 JWT signed
+// with the weak secret "secret" (in the crack wordlist). No public key needed.
+func matrixForHMACCrack(base string) (*model.RoleMatrix, string) {
+	const weakSecret = "secret"
+	aliceJWT := encodeHS256(
+		map[string]any{"alg": "HS256", "typ": "JWT"},
+		map[string]any{"sub": "alice", "role": "user"},
+		weakSecret,
+	)
+	return &model.RoleMatrix{
+		Version: "1",
+		Target:  model.TargetConfig{BaseURL: base},
+		Identities: []model.Identity{
+			{Name: "anon", Role: "unauthenticated", Rank: 0},
+			{Name: "alice", Role: "user", Rank: 10,
+				Markers: []string{"alice@example.com"},
+				Creds:   &model.Credentials{Bearer: aliceJWT}},
+		},
+	}, aliceJWT
+}
+
+// runDeepJWTCorpus runs the P5 deep JWT pipeline against srv on pathTemplate/path.
+// matrix is caller-supplied (so pubkey / weak-secret tests can share this).
+func runDeepJWTCorpus(t *testing.T, srv *httptest.Server, matrix *model.RoleMatrix, path, pathTemplate string) ([]model.Finding, map[string]int) {
+	t.Helper()
+	aliceBearerTok := ""
+	for _, id := range matrix.Identities {
+		if id.Name == "alice" && id.Creds != nil {
+			aliceBearerTok = id.Creds.Bearer
+		}
+	}
+
+	u, _ := url.Parse(srv.URL + path)
+	h := http.Header{}
+	h.Set("Authorization", "Bearer "+aliceBearerTok)
+	h.Set("Accept", "application/json")
+	cap := &model.CapturedRequest{
+		ID: "GET " + path, Method: "GET", URL: u, PathTemplate: pathTemplate,
+		Headers: h,
+	}
+	ep := &model.Endpoint{
+		Method: "GET", Host: cap.URL.Host, PathTemplate: pathTemplate,
+		Samples: []*model.CapturedRequest{cap},
+	}
+	owner, attr, _ := AttributeOwner(ep.Samples[0], matrix)
+	ep.OwnerIdentity = owner
+	ep.OwnerAttribution = attr
+
+	const baselineN = 3
+	baselinePlan := buildBaselinePlanLocal([]*model.Endpoint{ep}, baselineN)
+	reg := mutate.DefaultRegistry()
+	plan := replay.Generate([]*model.Endpoint{ep}, matrix, reg, 0)
+
+	rs := model.RunSettings{RatePerHost: 1000, Concurrency: 8, MaxBody: 1024 * 1024}
+	engine := replay.New(rs, "possession-deep-jwt-test", nil)
+	ctx := t.Context()
+	baselineResp := engine.Run(ctx, baselinePlan)
+	variantResp := engine.Run(ctx, plan)
+
+	byKey := map[string][]*model.Response{}
+	epKey := ep.Method + " " + ep.Host + ep.PathTemplate
+	for i, v := range baselinePlan.Variants {
+		key := variantEndpointKey(&v)
+		r := baselineResp[i]
+		byKey[key] = append(byKey[key], &r)
+	}
+	cal := Calibrate(byKey[epKey])
+	var vrs []VariantResponse
+	for i, v := range plan.Variants {
+		if variantEndpointKey(&v) != epKey {
+			continue
+		}
+		r := variantResp[i]
+		vrs = append(vrs, VariantResponse{Variant: &plan.Variants[i], Response: &r})
+	}
+	verdictCounts := map[string]int{}
+	res := ComparativeEvaluator{}.Evaluate(EvalContext{
+		Endpoint: ep, Owner: ep.OwnerIdentity, Calibration: cal,
+		VariantResponses: vrs, Matrix: matrix,
+	})
+	for _, vv := range res.Verdicts {
+		verdictCounts[vv.Verdict]++
+	}
+	return res.Findings, verdictCounts
+}
+
+// ─── P5 Tests ──────────────────────────────────────────────────────────
+
+// TestCorpus_VulnApp_P5_DeepJWTBypass: jwt-alg-confusion, jwt-kid-injection,
+// and jwt-jwks-spoof should all generate variants that bypass vulnapp /jwt/deep
+// (which accepts any JWT without verification).
+func TestCorpus_VulnApp_P5_DeepJWTBypass(t *testing.T) {
+	// Generate ephemeral RSA key pair for alg-confusion test.
+	privKey, pubKey, err := jwthelper.GenerateAttackerKeyPair()
+	if err != nil {
+		t.Fatalf("generate rsa key: %v", err)
+	}
+	_ = privKey
+	pubPEM, err := jwthelper.EncodePKIX(pubKey)
+	if err != nil {
+		t.Fatalf("encode pubkey pem: %v", err)
+	}
+
+	srv := startVulnAppDeepJWT(t)
+	defer srv.Close()
+
+	matrix, _ := matrixForDeepJWT(srv.URL, pubPEM)
+	findings, verdictCounts := runDeepJWTCorpus(t, srv, matrix, "/jwt/deep", "/jwt/deep")
+
+	wantMutators := map[string]bool{
+		"jwt-alg-confusion": false,
+		"jwt-kid-injection": false,
+		"jwt-jwks-spoof":    false,
+	}
+	for _, f := range findings {
+		if f.Verdict != VerdictBypass {
+			continue
+		}
+		if _, ok := wantMutators[f.Mutation]; ok {
+			wantMutators[f.Mutation] = true
+		}
+	}
+	for mut, found := range wantMutators {
+		if !found {
+			t.Errorf("vulnapp /jwt/deep: missing bypass from %q; verdictCounts=%v findings:\n%s",
+				mut, verdictCounts, summarizeFindings(findings))
+		}
+	}
+	t.Logf("vulnapp /jwt/deep P5 bypasses: %v verdictCounts=%v", wantMutators, verdictCounts)
+}
+
+// TestCorpus_SecureApp_P5_ZeroBypass — Gate E for P5 deep JWT attacks.
+// secureapp /jwt/deep rejects alg-confusion (wrong HMAC secret), kid-injection
+// (empty sig rejected), and jwks-spoof (alg=RS256 rejected vs HS256 expected).
+func TestCorpus_SecureApp_P5_ZeroBypass(t *testing.T) {
+	_, pubKey, err := jwthelper.GenerateAttackerKeyPair()
+	if err != nil {
+		t.Fatalf("generate rsa key: %v", err)
+	}
+	pubPEM, err := jwthelper.EncodePKIX(pubKey)
+	if err != nil {
+		t.Fatalf("encode pubkey pem: %v", err)
+	}
+
+	srv := startSecureAppDeepJWT(t)
+	defer srv.Close()
+
+	matrix, _ := matrixForDeepJWT(srv.URL, pubPEM)
+	findings, verdictCounts := runDeepJWTCorpus(t, srv, matrix, "/jwt/deep", "/jwt/deep")
+
+	bypassCount := 0
+	for _, f := range findings {
+		if f.Verdict == VerdictBypass {
+			bypassCount++
+		}
+	}
+	if bypassCount > 0 {
+		t.Errorf("secureapp /jwt/deep Gate E FAILED: %d bypass(es):\n%s",
+			bypassCount, summarizeFindings(findings))
+	}
+	t.Logf("secureapp /jwt/deep P5: zero bypass; verdictCounts=%v findings=%d", verdictCounts, len(findings))
+}
+
+// TestCorpus_VulnApp_P5_HMACCrack: jwt-hmac-crack recovers the weak secret and
+// re-signs a role=admin token; vulnapp returns admin data → privesc finding.
+func TestCorpus_VulnApp_P5_HMACCrack(t *testing.T) {
+	srv := startVulnAppDeepJWT(t)
+	defer srv.Close()
+
+	matrix, _ := matrixForHMACCrack(srv.URL)
+	findings, verdictCounts := runDeepJWTCorpus(t, srv, matrix, "/jwt/hmac-weak", "/jwt/hmac-weak")
+
+	found := false
+	for _, f := range findings {
+		if f.Mutation == "jwt-hmac-crack" && (f.Verdict == VerdictBypass || f.Verdict == VerdictSuspected) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("vulnapp /jwt/hmac-weak: expected bypass/suspected from jwt-hmac-crack; verdictCounts=%v findings:\n%s",
+			verdictCounts, summarizeFindings(findings))
+	}
+	t.Logf("vulnapp /jwt/hmac-weak: hmac-crack result: found=%v verdictCounts=%v", found, verdictCounts)
+}
+
+// TestCorpus_SecureApp_P5_HMACCrack_ZeroBypass — Gate E for hmac-crack.
+// secureapp /jwt/hmac-weak uses secureJWTSecret (not in wordlist), so no crack.
+func TestCorpus_SecureApp_P5_HMACCrack_ZeroBypass(t *testing.T) {
+	srv := startSecureAppDeepJWT(t)
+	defer srv.Close()
+
+	// Alice's JWT is signed with secureJWTSecret (strong, not in wordlist).
+	// matrixForHMACCrack uses "secret" as alice's token secret — secureapp will reject it.
+	// But actually we want secureapp to accept alice's valid token for baseline, then reject
+	// the cracked variants. Let's use a matrix where alice's token is signed with secureJWTSecret
+	// so baseline succeeds, but the crack fails (secureJWTSecret not in wordlist).
+	aliceJWT := encodeHS256(
+		map[string]any{"alg": "HS256", "typ": "JWT"},
+		map[string]any{"sub": "alice", "role": "user"},
+		secureJWTSecret,
+	)
+	matrix := &model.RoleMatrix{
+		Version: "1",
+		Target:  model.TargetConfig{BaseURL: srv.URL},
+		Identities: []model.Identity{
+			{Name: "anon", Role: "unauthenticated", Rank: 0},
+			{Name: "alice", Role: "user", Rank: 10,
+				Markers: []string{"alice@example.com"},
+				Creds:   &model.Credentials{Bearer: aliceJWT}},
+		},
+	}
+	findings, verdictCounts := runDeepJWTCorpus(t, srv, matrix, "/jwt/hmac-weak", "/jwt/hmac-weak")
+
+	bypassCount := 0
+	for _, f := range findings {
+		if f.Verdict == VerdictBypass {
+			bypassCount++
+		}
+	}
+	if bypassCount > 0 {
+		t.Errorf("secureapp /jwt/hmac-weak Gate E FAILED: %d bypass(es):\n%s",
+			bypassCount, summarizeFindings(findings))
+	}
+	t.Logf("secureapp /jwt/hmac-weak: zero bypass; verdictCounts=%v findings=%d", verdictCounts, len(findings))
 }

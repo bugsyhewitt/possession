@@ -21,10 +21,16 @@ import (
 // raw is the on-disk YAML shape. It is intentionally separate from
 // model.RoleMatrix so that schema/version drift can be absorbed here
 // without leaking into the domain types.
+type rawJWT struct {
+	PublicKeyPEM string `yaml:"public_key_pem"`
+	JWKSUrl      string `yaml:"jwks_url"`
+}
+
 type raw struct {
 	Version    string `yaml:"version"`
 	Target     struct {
-		BaseURL string `yaml:"base_url"`
+		BaseURL string  `yaml:"base_url"`
+		JWT     *rawJWT `yaml:"jwt"`
 	} `yaml:"target"`
 	Identities []rawIdentity `yaml:"identities"`
 	Scope      struct {
@@ -117,9 +123,16 @@ func Load(r io.Reader) (*model.RoleMatrix, error) {
 }
 
 func toMatrix(rm raw) (*model.RoleMatrix, error) {
+	tgt := model.TargetConfig{BaseURL: rm.Target.BaseURL}
+	if rm.Target.JWT != nil {
+		tgt.JWT = &model.JWTTargetConfig{
+			PublicKeyPEM: rm.Target.JWT.PublicKeyPEM,
+			JWKSUrl:      rm.Target.JWT.JWKSUrl,
+		}
+	}
 	out := &model.RoleMatrix{
 		Version: rm.Version,
-		Target:  model.TargetConfig{BaseURL: rm.Target.BaseURL},
+		Target:  tgt,
 		Scope: model.ScopeConfig{
 			Include: rm.Scope.Include,
 			Exclude: rm.Scope.Exclude,
