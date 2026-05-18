@@ -50,7 +50,12 @@ type Engine struct {
 	mu      sync.Mutex
 	refresh map[string]*refreshResult // keyed by identity name
 	// flows caches per-identity flow execution results (P7).
-	flows map[string]*flowExecResult // keyed by identity name
+	flows    map[string]*flowExecResult // keyed by identity name
+	// flowHTTP is a jar-free HTTP client used exclusively for flow execution.
+	// Flows establish their own credentials via explicit extractions; the main
+	// client's cookie jar must not bleed cross-identity session state into
+	// flow-obtained credentials.
+	flowHTTP *http.Client
 }
 
 // flowExecResult holds the outcome of executing a stateful flow for one identity.
@@ -109,6 +114,18 @@ func New(s model.RunSettings, userAgent string, stderr io.Writer) *Engine {
 		}
 	}
 
+	// flowHTTP is a separate client with no cookie jar. Flows must not share
+	// session state across identities via the jar (D43 / integration fix).
+	flowClient := &http.Client{
+		Timeout:   s.Timeout,
+		Transport: transport,
+	}
+	if !s.FollowRedirects {
+		flowClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+	}
+
 	return &Engine{
 		HTTP:        client,
 		Limiter:     newHostLimiter(rate, s.NoLimit),
@@ -118,6 +135,7 @@ func New(s model.RunSettings, userAgent string, stderr io.Writer) *Engine {
 		Stderr:      stderr,
 		refresh:     make(map[string]*refreshResult),
 		flows:       make(map[string]*flowExecResult),
+		flowHTTP:    flowClient,
 	}
 }
 
@@ -154,7 +172,7 @@ func (e *Engine) PrepareFlows(ctx context.Context, matrix *model.RoleMatrix) {
 		if matrix.Target.BaseURL != "" {
 			baseURL = matrix.Target.BaseURL
 		}
-		result := flow.Execute(ctx, e.HTTP, baseURL, fd, nil)
+		result := flow.Execute(ctx, e.flowHTTP, baseURL, fd, nil)
 		res := &flowExecResult{
 			vars:         result.Vars,
 			volatileHead: result.VolatileHead,
@@ -545,18 +563,34 @@ func (e *Engine) applyFlowInjections(req *http.Request, identName string, ctx co
 	if !ok || fr == nil || fr.err != nil || len(fr.injections) == 0 {
 		return
 	}
-	vars := fr.vars
-	// Re-run volatile tail for nonce/CSRF freshness.
-	if fr.volatileHead >= 0 && fr.flowDef != nil {
-		updated, err := flow.ExecuteFrom(ctx, e.HTTP, "", *fr.flowDef, fr.vars, fr.volatileHead)
+
+	// Copy vars and flow metadata under lock to prevent data races with
+	// concurrent goroutines that may be updating fr.vars (volatile re-runs).
+	e.mu.Lock()
+	vars := make(map[string]string, len(fr.vars))
+	for k, v := range fr.vars {
+		vars[k] = v
+	}
+	volatileHead := fr.volatileHead
+	flowDef := fr.flowDef
+	e.mu.Unlock()
+
+	// Re-run volatile tail for nonce/CSRF freshness (outside the lock — this
+	// makes network I/O and must not hold the mutex).
+	if volatileHead >= 0 && flowDef != nil {
+		updated, err := flow.ExecuteFrom(ctx, e.flowHTTP, "", *flowDef, vars, volatileHead)
 		if err == nil {
 			vars = updated
-			// Update cached vars so subsequent variants use the fresh values.
+			// Write updated values back key-by-key under lock so concurrent
+			// readers always see a consistent map.
 			e.mu.Lock()
-			fr.vars = updated
+			for k, v := range updated {
+				fr.vars[k] = v
+			}
 			e.mu.Unlock()
 		}
 	}
+
 	for name, inj := range fr.injections {
 		val, ok := vars[name]
 		if !ok {
