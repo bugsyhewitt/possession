@@ -1307,3 +1307,318 @@ func TestCorpus_P6_AssertionEvaluator_SecureApp_ZeroBypass(t *testing.T) {
 	}
 	t.Logf("P6 assertion secureapp: zero bypass; verdictCounts=%v findings=%d", verdictCounts, len(findings))
 }
+
+// ─── P7: Stateful Flow corpus tests ───────────────────────────────────
+
+// startVulnAppWithFlows extends startVulnApp with:
+//   - POST /login — returns session cookie and csrf token
+//   - DELETE /orders/{id} — CSRF-protected write; IDOR: any session can delete any order
+func startVulnAppWithFlows(t *testing.T) *httptest.Server {
+	mux := http.NewServeMux()
+
+	orders := map[string]string{
+		"order-alice": `{"id":"order-alice","owner":"alice","total":99}`,
+		"order-bob":   `{"id":"order-bob","owner":"bob","total":42}`,
+	}
+	// Shared CSRF map: session → csrf token (simple, single-user)
+	csrfTokens := map[string]string{
+		"alice-session": "csrf-alice-123",
+		"bob-session":   "csrf-bob-456",
+	}
+
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(405)
+			return
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		user, _ := body["user"].(string)
+		sessionName := user + "-session"
+		http.SetCookie(w, &http.Cookie{Name: "session", Value: sessionName})
+		writeJSON(w, 200, `{"status":"ok","csrf_token":"`+csrfTokens[sessionName]+`"}`)
+	})
+
+	// DELETE /orders/{id}: vulnerable — doesn't check session owner vs order owner.
+	// Just checks session is valid and CSRF token matches.
+	mux.HandleFunc("/orders/", func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimPrefix(r.URL.Path, "/orders/")
+		// Read session cookie.
+		var sessionCookie string
+		for _, c := range r.Cookies() {
+			if c.Name == "session" {
+				sessionCookie = c.Value
+			}
+		}
+		if sessionCookie == "" {
+			writeJSON(w, 401, `{"error":"no session"}`)
+			return
+		}
+		// Check CSRF.
+		csrfHeader := r.Header.Get("X-CSRF-Token")
+		expected, ok := csrfTokens[sessionCookie]
+		if !ok || csrfHeader != expected {
+			writeJSON(w, 403, `{"error":"bad csrf"}`)
+			return
+		}
+		order, ok := orders[id]
+		if !ok {
+			writeJSON(w, 404, `{"error":"not found"}`)
+			return
+		}
+		// IDOR: returns/deletes regardless of who owns it.
+		if r.Method == http.MethodDelete {
+			writeJSON(w, 200, `{"deleted":true,"order":`+order+`}`)
+		} else {
+			writeJSON(w, 200, order)
+		}
+	})
+
+	return httptest.NewServer(mux)
+}
+
+// startSecureAppWithFlows mirrors vulnapp but properly checks order ownership.
+func startSecureAppWithFlows(t *testing.T) *httptest.Server {
+	mux := http.NewServeMux()
+
+	orders := map[string]string{
+		"order-alice": `{"id":"order-alice","owner":"alice","total":99}`,
+		"order-bob":   `{"id":"order-bob","owner":"bob","total":42}`,
+	}
+	orderOwners := map[string]string{
+		"order-alice": "alice",
+		"order-bob":   "bob",
+	}
+	csrfTokens := map[string]string{
+		"alice-session": "csrf-alice-sec",
+		"bob-session":   "csrf-bob-sec",
+	}
+	sessionUsers := map[string]string{
+		"alice-session": "alice",
+		"bob-session":   "bob",
+	}
+
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(405)
+			return
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		user, _ := body["user"].(string)
+		sessionName := user + "-session"
+		http.SetCookie(w, &http.Cookie{Name: "session", Value: sessionName})
+		writeJSON(w, 200, `{"status":"ok","csrf_token":"`+csrfTokens[sessionName]+`"}`)
+	})
+
+	mux.HandleFunc("/orders/", func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimPrefix(r.URL.Path, "/orders/")
+		var sessionCookie string
+		for _, c := range r.Cookies() {
+			if c.Name == "session" {
+				sessionCookie = c.Value
+			}
+		}
+		if sessionCookie == "" {
+			writeJSON(w, 401, `{"error":"no session"}`)
+			return
+		}
+		csrfHeader := r.Header.Get("X-CSRF-Token")
+		expected, ok := csrfTokens[sessionCookie]
+		if !ok || csrfHeader != expected {
+			writeJSON(w, 403, `{"error":"bad csrf"}`)
+			return
+		}
+		caller := sessionUsers[sessionCookie]
+		owner := orderOwners[id]
+		if owner == "" {
+			writeJSON(w, 404, `{"error":"not found"}`)
+			return
+		}
+		if caller != owner {
+			writeJSON(w, 403, `{"error":"forbidden"}`)
+			return
+		}
+		order := orders[id]
+		if r.Method == http.MethodDelete {
+			writeJSON(w, 200, `{"deleted":true,"order":`+order+`}`)
+		} else {
+			writeJSON(w, 200, order)
+		}
+	})
+
+	return httptest.NewServer(mux)
+}
+
+// runFlowCorpus runs the full P7 pipeline with a stateful flow for alice.
+func runFlowCorpus(t *testing.T, srv *httptest.Server, endpointDefs []endpointDef) ([]model.Finding, map[string]int) {
+	t.Helper()
+	// Build a matrix with a login flow for alice.
+	aliceFlow := model.FlowDef{
+		Name: "alice-login",
+		Steps: []model.FlowStep{
+			{
+				Name: "login",
+				Request: &model.RawRequest{
+					Method: "POST",
+					URL:    srv.URL + "/login",
+					Body:   `{"user":"alice","pass":"alice-pass"}`,
+				},
+				Extract: []model.FlowExtraction{
+					{Name: "session", From: "cookie", Expr: "session",
+						Inject: model.Injection{Into: "cookie", Key: "session"}},
+					{Name: "csrf_token", From: "body-json", Expr: "$.csrf_token", Volatile: true,
+						Inject: model.Injection{Into: "header", Key: "X-CSRF-Token"}},
+				},
+			},
+		},
+	}
+	bobFlow := model.FlowDef{
+		Name: "bob-login",
+		Steps: []model.FlowStep{
+			{
+				Name: "login",
+				Request: &model.RawRequest{
+					Method: "POST",
+					URL:    srv.URL + "/login",
+					Body:   `{"user":"bob","pass":"bob-pass"}`,
+				},
+				Extract: []model.FlowExtraction{
+					{Name: "session", From: "cookie", Expr: "session",
+						Inject: model.Injection{Into: "cookie", Key: "session"}},
+					{Name: "csrf_token", From: "body-json", Expr: "$.csrf_token", Volatile: true,
+						Inject: model.Injection{Into: "header", Key: "X-CSRF-Token"}},
+				},
+			},
+		},
+	}
+
+	matrix := &model.RoleMatrix{
+		Version: "1",
+		Target:  model.TargetConfig{BaseURL: srv.URL},
+		Flows:   map[string]model.FlowDef{"alice-login": aliceFlow, "bob-login": bobFlow},
+		Identities: []model.Identity{
+			{Name: "anon", Role: "unauthenticated", Rank: 0},
+			{Name: "alice", Role: "user", Rank: 10,
+				Markers:  []string{"alice", "order-alice"},
+				FlowName: "alice-login"},
+			{Name: "bob", Role: "user", Rank: 10,
+				Markers:  []string{"bob", "order-bob"},
+				FlowName: "bob-login"},
+		},
+	}
+
+	var endpoints []*model.Endpoint
+	for _, d := range endpointDefs {
+		u, _ := url.Parse(srv.URL + d.path)
+		h := http.Header{}
+		// Alice's captured request — no static bearer (flow provides session).
+		cap := &model.CapturedRequest{
+			ID: d.method + " " + d.path, Method: d.method, URL: u,
+			PathTemplate: d.pathTemplate, Headers: h,
+		}
+		ep := &model.Endpoint{
+			Method: d.method, Host: u.Host, PathTemplate: d.pathTemplate,
+			Samples: []*model.CapturedRequest{cap},
+		}
+		endpoints = append(endpoints, ep)
+	}
+	for _, ep := range endpoints {
+		owner, attr, _ := AttributeOwner(ep.Samples[0], matrix)
+		ep.OwnerIdentity = owner
+		ep.OwnerAttribution = attr
+	}
+
+	rs := model.RunSettings{RatePerHost: 1000, Concurrency: 4, MaxBody: 1024 * 1024}
+	engine := replay.New(rs, "possession-flow-corpus-test", nil)
+	ctx := t.Context()
+	engine.PrepareFlows(ctx, matrix)
+
+	const baselineN = 3
+	baselinePlan := buildBaselinePlanLocal(endpoints, baselineN)
+	reg := mutate.DefaultRegistry()
+	plan := replay.Generate(endpoints, matrix, reg, 0)
+
+	baselineResp := engine.Run(ctx, baselinePlan)
+	variantResp := engine.Run(ctx, plan)
+
+	byKey := make(map[string][]*model.Response)
+	for i, v := range baselinePlan.Variants {
+		key := variantEndpointKey(&v)
+		r := baselineResp[i]
+		byKey[key] = append(byKey[key], &r)
+	}
+
+	verdictCounts := map[string]int{}
+	var allFindings []model.Finding
+	ev := ComparativeEvaluator{}
+	for _, ep := range endpoints {
+		key := ep.Method + " " + ep.Host + ep.PathTemplate
+		cal := Calibrate(byKey[key])
+		var vrs []VariantResponse
+		for i, v := range plan.Variants {
+			if variantEndpointKey(&v) != key {
+				continue
+			}
+			r := variantResp[i]
+			vrs = append(vrs, VariantResponse{Variant: &plan.Variants[i], Response: &r})
+		}
+		res := ev.Evaluate(EvalContext{
+			Endpoint: ep, Owner: ep.OwnerIdentity, Calibration: cal,
+			VariantResponses: vrs, Matrix: matrix,
+		})
+		for _, vv := range res.Verdicts {
+			verdictCounts[vv.Verdict]++
+		}
+		allFindings = append(allFindings, res.Findings...)
+	}
+	return allFindings, verdictCounts
+}
+
+// TestCorpus_P7_VulnApp_WriteEndpointIDOR: DELETE /orders/order-alice is
+// accessible by bob's session → IDOR on a write endpoint.
+func TestCorpus_P7_VulnApp_WriteEndpointIDOR(t *testing.T) {
+	srv := startVulnAppWithFlows(t)
+	defer srv.Close()
+
+	defs := []endpointDef{
+		{"DELETE", "/orders/order-alice", "/orders/{id}"},
+	}
+	findings, verdictCounts := runFlowCorpus(t, srv, defs)
+
+	bypassFound := false
+	for _, f := range findings {
+		if f.Verdict == VerdictBypass || f.Verdict == VerdictSuspected {
+			bypassFound = true
+			break
+		}
+	}
+	if !bypassFound {
+		t.Errorf("P7: expected bypass/suspected on vulnapp DELETE /orders/{id}; verdictCounts=%v findings:\n%s",
+			verdictCounts, summarizeFindings(findings))
+	}
+	t.Logf("P7 flow vulnapp: verdictCounts=%v findings=%d", verdictCounts, len(findings))
+}
+
+// TestCorpus_P7_SecureApp_ZeroBypass — Gate E for P7.
+// secureapp properly checks ownership; bob cannot delete alice's orders.
+func TestCorpus_P7_SecureApp_ZeroBypass(t *testing.T) {
+	srv := startSecureAppWithFlows(t)
+	defer srv.Close()
+
+	defs := []endpointDef{
+		{"DELETE", "/orders/order-alice", "/orders/{id}"},
+	}
+	findings, verdictCounts := runFlowCorpus(t, srv, defs)
+
+	bypassCount := 0
+	for _, f := range findings {
+		if f.Verdict == VerdictBypass {
+			bypassCount++
+		}
+	}
+	if bypassCount > 0 {
+		t.Errorf("P7 Gate E FAILED: %d bypass(es):\n%s", bypassCount, summarizeFindings(findings))
+	}
+	t.Logf("P7 flow secureapp: zero bypass; verdictCounts=%v findings=%d", verdictCounts, len(findings))
+}

@@ -210,6 +210,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	start := time.Now()
 	engine.PrepareRefresh(ctx, matrix)
+	engine.PrepareFlows(ctx, matrix)
 	baselineResponses := engine.Run(ctx, baselinePlan)
 	responses := engine.Run(ctx, plan)
 	end := time.Now()

@@ -24,6 +24,12 @@ type Identity struct {
 	// the resource owner's marker is a near-certain bypass. Empty by default
 	// for backward compatibility.
 	Markers []string
+
+	// FlowName references a named FlowDef in RoleMatrix.Flows. When set,
+	// the replay engine runs the flow before this identity's variants to
+	// establish a live session (Tier-2, P7). Mutually exclusive with Refresh
+	// at the per-identity level; if both are set, the flow takes precedence.
+	FlowName string
 }
 
 // Credentials groups the static authentication material attached to an

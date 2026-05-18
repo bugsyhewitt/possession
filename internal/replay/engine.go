@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bugsyhewitt/possession/internal/flow"
 	"github.com/bugsyhewitt/possession/internal/model"
 )
 
@@ -48,6 +49,17 @@ type Engine struct {
 	// fires at most once per scan (4.4).
 	mu      sync.Mutex
 	refresh map[string]*refreshResult // keyed by identity name
+	// flows caches per-identity flow execution results (P7).
+	flows map[string]*flowExecResult // keyed by identity name
+}
+
+// flowExecResult holds the outcome of executing a stateful flow for one identity.
+type flowExecResult struct {
+	vars         map[string]string // extracted variables from flow execution
+	injections   map[string]model.Injection // name → injection target
+	volatileHead int               // first volatile step index (-1 = none)
+	flowDef      *model.FlowDef    // the flow definition for volatile re-runs
+	err          error
 }
 
 // refreshResult captures the outcome of a single identity's refresh hook.
@@ -105,6 +117,68 @@ func New(s model.RunSettings, userAgent string, stderr io.Writer) *Engine {
 		UserAgent:   userAgent,
 		Stderr:      stderr,
 		refresh:     make(map[string]*refreshResult),
+		flows:       make(map[string]*flowExecResult),
+	}
+}
+
+// PrepareFlows executes named flows for every identity that references one
+// (P7). Results are cached; a flow failure marks that identity's variants
+// inconclusive (D10 policy, consistent with Tier-1 refresh).
+func (e *Engine) PrepareFlows(ctx context.Context, matrix *model.RoleMatrix) {
+	if matrix == nil || len(matrix.Flows) == 0 {
+		return
+	}
+	for i := range matrix.Identities {
+		ident := matrix.Identities[i]
+		if ident.FlowName == "" {
+			continue
+		}
+		e.mu.Lock()
+		_, done := e.flows[ident.Name]
+		e.mu.Unlock()
+		if done {
+			continue
+		}
+		fd, ok := matrix.Flows[ident.FlowName]
+		if !ok {
+			res := &flowExecResult{err: fmt.Errorf("flow %q not found in matrix.flows", ident.FlowName)}
+			fmt.Fprintf(e.Stderr,
+				"!!! FLOW FAILED for identity %q: %v — variants will be inconclusive\n",
+				ident.Name, res.err)
+			e.mu.Lock()
+			e.flows[ident.Name] = res
+			e.mu.Unlock()
+			continue
+		}
+		baseURL := ""
+		if matrix.Target.BaseURL != "" {
+			baseURL = matrix.Target.BaseURL
+		}
+		result := flow.Execute(ctx, e.HTTP, baseURL, fd, nil)
+		res := &flowExecResult{
+			vars:         result.Vars,
+			volatileHead: result.VolatileHead,
+			flowDef:      &fd,
+		}
+		if result.Err != nil {
+			res.err = result.Err
+			fmt.Fprintf(e.Stderr,
+				"!!! FLOW FAILED for identity %q: %v — variants will be inconclusive\n",
+				ident.Name, res.err)
+		} else {
+			// Build injection map from flow extractions.
+			res.injections = make(map[string]model.Injection)
+			for _, step := range fd.Steps {
+				for _, ex := range step.Extract {
+					if ex.Inject.Into != "" {
+						res.injections[ex.Name] = ex.Inject
+					}
+				}
+			}
+		}
+		e.mu.Lock()
+		e.flows[ident.Name] = res
+		e.mu.Unlock()
 	}
 }
 
@@ -328,6 +402,15 @@ func (e *Engine) fire(ctx context.Context, v model.Variant) model.Response {
 			resp.Err = "refresh failed: " + rr.err.Error()
 			return resp
 		}
+		// Flow-failure short circuit (P7, same D10 policy).
+		e.mu.Lock()
+		fr, fok := e.flows[v.Identity.Name]
+		e.mu.Unlock()
+		if fok && fr.err != nil {
+			resp.Inconclusive = true
+			resp.Err = "flow failed: " + fr.err.Error()
+			return resp
+		}
 	}
 
 	req, err := buildHTTPRequest(ctx, v.Base)
@@ -342,6 +425,8 @@ func (e *Engine) fire(ctx context.Context, v model.Variant) model.Response {
 	// are static.
 	if v.Identity != nil {
 		e.applyInjections(req, v.Identity.Name)
+		// Apply flow variable injections (P7).
+		e.applyFlowInjections(req, v.Identity.Name, ctx)
 	}
 
 	start := time.Now()
@@ -446,6 +531,46 @@ func (e *Engine) applyInjections(req *http.Request, identName string) {
 			updated, _ := json.Marshal(doc)
 			req.Body = io.NopCloser(bytes.NewReader(updated))
 			req.ContentLength = int64(len(updated))
+		}
+	}
+}
+
+// applyFlowInjections applies flow-extracted variable values to req using each
+// extraction's Inject directive. For volatile variables, re-runs the volatile
+// tail first to ensure freshness.
+func (e *Engine) applyFlowInjections(req *http.Request, identName string, ctx context.Context) {
+	e.mu.Lock()
+	fr, ok := e.flows[identName]
+	e.mu.Unlock()
+	if !ok || fr == nil || fr.err != nil || len(fr.injections) == 0 {
+		return
+	}
+	vars := fr.vars
+	// Re-run volatile tail for nonce/CSRF freshness.
+	if fr.volatileHead >= 0 && fr.flowDef != nil {
+		updated, err := flow.ExecuteFrom(ctx, e.HTTP, "", *fr.flowDef, fr.vars, fr.volatileHead)
+		if err == nil {
+			vars = updated
+			// Update cached vars so subsequent variants use the fresh values.
+			e.mu.Lock()
+			fr.vars = updated
+			e.mu.Unlock()
+		}
+	}
+	for name, inj := range fr.injections {
+		val, ok := vars[name]
+		if !ok {
+			continue
+		}
+		switch inj.Into {
+		case "header":
+			req.Header.Set(inj.Key, val)
+		case "cookie":
+			req.AddCookie(&http.Cookie{Name: inj.Key, Value: val})
+		case "query":
+			q := req.URL.Query()
+			q.Set(inj.Key, val)
+			req.URL.RawQuery = q.Encode()
 		}
 	}
 }

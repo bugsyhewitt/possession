@@ -12,7 +12,33 @@ type RoleMatrix struct {
 	Identities []Identity
 	Scope      ScopeConfig
 	Settings   RunSettings
-	Assertions []Assertion // optional declarative access expectations (P6)
+	Assertions []Assertion         // optional declarative access expectations (P6)
+	Flows      map[string]FlowDef  // optional named flow definitions (P7)
+}
+
+// FlowDef is a named, ordered sequence of HTTP steps an identity runs to
+// establish session state before its variants are fired. Packet 7 / D41.
+type FlowDef struct {
+	Name  string
+	Steps []FlowStep
+}
+
+// FlowStep is one request+extract step within a flow.
+type FlowStep struct {
+	Name    string
+	Request *RawRequest     // if non-nil, issue this request
+	Extract []FlowExtraction
+}
+
+// FlowExtraction pulls a named value from a step's response and makes it
+// available for {name} interpolation in later steps and for injection into
+// variant requests.
+type FlowExtraction struct {
+	Name     string
+	From     string    // body-json | body-regex | header | cookie
+	Expr     string
+	Volatile bool      // if true, re-run this step per replay batch (nonce/CSRF)
+	Inject   Injection // optional: where to inject the value into variant requests
 }
 
 // TargetConfig describes the system under test at a coarse level.

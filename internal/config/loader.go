@@ -31,6 +31,43 @@ type rawAssertion struct {
 	Expect   map[string]string `yaml:"expect"`
 }
 
+type rawFlowExtraction struct {
+	Name     string `yaml:"name"`
+	From     string `yaml:"from"`
+	Expr     string `yaml:"expr"`
+	Volatile bool   `yaml:"volatile"`
+	Inject   struct {
+		Into string `yaml:"into"`
+		Key  string `yaml:"key"`
+	} `yaml:"inject"`
+}
+
+type rawFlowStep struct {
+	Name    string              `yaml:"name"`
+	Request *struct {
+		Method  string            `yaml:"method"`
+		URL     string            `yaml:"url"`
+		Headers map[string]string `yaml:"headers"`
+		Body    string            `yaml:"body"`
+	} `yaml:"request"`
+	Extract []rawFlowExtraction `yaml:"extract"`
+}
+
+type rawFlow struct {
+	Name  string        `yaml:"name"`
+	Steps []rawFlowStep `yaml:"steps"`
+}
+
+type rawIdentity struct {
+	Name     string          `yaml:"name"`
+	Role     string          `yaml:"role"`
+	Rank     int             `yaml:"rank"`
+	Creds    *rawCredentials `yaml:"creds"`
+	Refresh  *rawRefresh     `yaml:"refresh"`
+	Markers  []string        `yaml:"markers"`
+	FlowName string          `yaml:"flow"`
+}
+
 type raw struct {
 	Version    string `yaml:"version"`
 	Target     struct {
@@ -39,6 +76,7 @@ type raw struct {
 	} `yaml:"target"`
 	Identities []rawIdentity  `yaml:"identities"`
 	Assertions []rawAssertion `yaml:"assertions"`
+	Flows      []rawFlow      `yaml:"flows"`
 	Scope      struct {
 		Include []string `yaml:"include"`
 		Exclude []string `yaml:"exclude"`
@@ -49,15 +87,6 @@ type raw struct {
 		Timeout         string  `yaml:"timeout"`
 		FollowRedirects bool    `yaml:"follow_redirects"`
 	} `yaml:"settings"`
-}
-
-type rawIdentity struct {
-	Name    string          `yaml:"name"`
-	Role    string          `yaml:"role"`
-	Rank    int             `yaml:"rank"`
-	Creds   *rawCredentials `yaml:"creds"`
-	Refresh *rawRefresh     `yaml:"refresh"`
-	Markers []string        `yaml:"markers"`
 }
 
 type rawCredentials struct {
@@ -200,7 +229,40 @@ func toMatrix(rm raw) (*model.RoleMatrix, error) {
 			}
 			ident.Refresh = rh
 		}
+		ident.FlowName = ri.FlowName
 		out.Identities = append(out.Identities, ident)
+	}
+	// Parse flows.
+	if len(rm.Flows) > 0 {
+		out.Flows = make(map[string]model.FlowDef, len(rm.Flows))
+		for _, rf := range rm.Flows {
+			fd := model.FlowDef{Name: rf.Name}
+			for _, rs := range rf.Steps {
+				step := model.FlowStep{Name: rs.Name}
+				if rs.Request != nil {
+					step.Request = &model.RawRequest{
+						Method:  rs.Request.Method,
+						URL:     rs.Request.URL,
+						Headers: rs.Request.Headers,
+						Body:    rs.Request.Body,
+					}
+				}
+				for _, re := range rs.Extract {
+					step.Extract = append(step.Extract, model.FlowExtraction{
+						Name:     re.Name,
+						From:     re.From,
+						Expr:     re.Expr,
+						Volatile: re.Volatile,
+						Inject: model.Injection{
+							Into: re.Inject.Into,
+							Key:  re.Inject.Key,
+						},
+					})
+				}
+				fd.Steps = append(fd.Steps, step)
+			}
+			out.Flows[rf.Name] = fd
+		}
 	}
 	for _, ra := range rm.Assertions {
 		out.Assertions = append(out.Assertions, model.Assertion{
