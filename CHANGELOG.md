@@ -5,6 +5,87 @@ All notable changes to possession will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-05-18
+
+Four packets shipped in the v1.1 autonomous run. Plus one integration
+hotfix found during merge: `replay.Engine.flowHTTP` (separate cookie-jar-free
+client for flow execution, preventing cross-identity session bleed).
+
+### Added
+
+#### Packet 5 — Deep JWT Attacks
+- Four new JWT mutators registered after the v1.0 set (D33–D36):
+  - `jwt-alg-confusion`: RS256/ES256→HS256 by re-signing with the server's
+    public key as the HMAC secret. Requires `target.jwt.public_key_pem`.
+  - `jwt-kid-injection`: path-traversal (`../../../dev/null`) and SQLi-style
+    payloads in the `kid` JWT header.
+  - `jwt-jwks-spoof`: embed attacker-controlled key via inline `jwk` header or
+    `jku` redirect; signs with matching ephemeral RSA-2048 private key.
+  - `jwt-hmac-crack`: wordlist-based HS256 secret recovery; re-signs tampered
+    token (role=admin) on a hit. Extends to `--jwt-wordlist <file>`.
+- `target.jwt.public_key_pem` / `target.jwt.jwks_url` in the role-matrix
+  schema (additive; absent → key-dependent attacks skip with a note).
+- New helpers in `internal/jwt`: `AlgConfusionFromPEM`, `GenerateAttackerKeyPair`,
+  `EncodeWithRS256`, `PublicKeyToJWK`, `B64URL`, `EncodePKIX`.
+
+#### Packet 6 — AuthMatrix-style Assertion Evaluator
+- `AssertionEvaluator` implements the `Evaluator` interface (D16). Predeclared
+  `assertions:` block in the matrix YAML maps endpoint globs × roles → `allow`
+  or `deny`. Explicit expectations yield high-confidence bypass findings (0.97).
+- `BothEvaluator`: runs assertion evaluator where assertions exist, comparative
+  everywhere else. Assertion verdict takes precedence.
+- `--evaluator comparative|assertion|both` flag (default `comparative`; backward
+  compatible). `assertion` with no assertions block → clear error.
+- Glob precedence: most-specific pattern wins (longest string length; ties by
+  declaration order). Defined and tested.
+- `broken-deny` finding class (surfaces as `suspected`) for access-denied-but-
+  allow-expected cases (overly-strict controls, not security bugs).
+- Config validator: roles in `expect` must exist in `identities`; globs must compile.
+
+#### Packet 7 — Stateful Flows (Tier 2)
+- New `internal/flow` package:
+  - `Validate`: cycle detection, forward-only reference resolution.
+  - `Execute`: multi-step flow execution with `{name}` interpolation (identifier
+    regex: `[A-Za-z][A-Za-z0-9_-]*` to avoid false matches in JSON bodies).
+  - `ExecuteFrom`: re-run from a given step index for volatile/nonce re-use.
+- `model.FlowDef`, `model.FlowStep`, `model.FlowExtraction` (with optional
+  `Inject` and `Volatile` fields). `Identity.FlowName` references a named flow.
+- `replay.Engine.PrepareFlows`: executes each identity's flow before its
+  variants; caches result; D10 failure policy (inconclusive on flow failure).
+- Volatile step re-run in `applyFlowInjections` per-variant for CSRF/nonce
+  freshness; uses `Engine.flowHTTP` (jar-free, prevents cross-identity bleed).
+- YAML: `flows:` list + `flow:` field on identities.
+
+#### Packet 8 — Tenant Awareness + OAuth2/OIDC
+- `Identity.Tenant` field + `RoleMatrix.Tenants` list. Activates the D31
+  dormant `idor-cross-tenant` code path: `swap-identity` across a tenant
+  boundary → class `idor-cross-tenant`, severity `critical`,
+  ASVS `v5.0.0-8.4.1 + v5.0.0-8.2.2`.
+- `OAuth2StepDef` in `model.FlowStep.OAuth2`: `client_credentials` and
+  `refresh_token` grants. Token acquired via `issueOAuth2Step` in
+  `internal/flow`; result flows through the variable bag for injection.
+- YAML: `tenants:`, `tenant:` on identities, `oauth2:` in flow steps.
+
+### Fixed
+
+- **Integration hotfix (replay):** `Engine.flowHTTP` — a separate
+  `http.Client` without a cookie jar for all flow execution. The main
+  client's jar was accumulating `Set-Cookie` responses from multiple
+  identity login flows, causing cross-identity session bleed and
+  intermittent false negatives in the P7 corpus under `-race`.
+  Concurrently fixed a data race in `applyFlowInjections` (copy `fr.vars`
+  under mutex before calling `ExecuteFrom`; update keys individually on
+  write-back rather than replacing the map pointer).
+
+### Changed
+
+- Mutator registry expanded from 9 to 13 entries (P5 additions).
+- `docs/DECISIONS.md`: D33–D46 added.
+- `docs/ROADMAP.md`: v1.2 backlog section added (SAML, deep OAuth/OIDC,
+  GraphQL authz, ASVS V9 mapping, TUI, Postman/OpenAPI input).
+
+---
+
 ## [1.0.0] — 2026-05-16
 
 First stable release. Four packets shipped:
