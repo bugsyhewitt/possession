@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -39,11 +40,17 @@ func Execute(ctx context.Context, client *http.Client, baseURL string, fd model.
 		if err := ctx.Err(); err != nil {
 			return Result{Vars: vars, VolatileHead: volatileHead, Err: fmt.Errorf("flow %q step %q: context: %w", fd.Name, step.Name, err)}
 		}
-		if step.Request == nil {
-			// Steps without requests are pure extraction placeholders; skip.
+		if step.Request == nil && step.OAuth2 == nil {
+			// Steps without requests or oauth2 are pure extraction placeholders; skip.
 			continue
 		}
-		resp, err := issueStep(ctx, client, baseURL, step.Request, vars)
+		var resp *http.Response
+		var err error
+		if step.OAuth2 != nil {
+			resp, err = issueOAuth2Step(ctx, client, step.OAuth2, vars)
+		} else {
+			resp, err = issueStep(ctx, client, baseURL, step.Request, vars)
+		}
 		if err != nil {
 			return Result{Vars: vars, VolatileHead: volatileHead, Err: fmt.Errorf("flow %q step %q: %w", fd.Name, step.Name, err)}
 		}
@@ -75,10 +82,16 @@ func ExecuteFrom(ctx context.Context, client *http.Client, baseURL string, fd mo
 	}
 	for i := fromIndex; i < len(fd.Steps); i++ {
 		step := fd.Steps[i]
-		if step.Request == nil {
+		if step.Request == nil && step.OAuth2 == nil {
 			continue
 		}
-		resp, err := issueStep(ctx, client, baseURL, step.Request, out)
+		var resp *http.Response
+		var err error
+		if step.OAuth2 != nil {
+			resp, err = issueOAuth2Step(ctx, client, step.OAuth2, out)
+		} else {
+			resp, err = issueStep(ctx, client, baseURL, step.Request, out)
+		}
 		if err != nil {
 			return out, fmt.Errorf("flow %q step %q (volatile re-run): %w", fd.Name, step.Name, err)
 		}
@@ -170,6 +183,41 @@ func interpolate(s string, vars map[string]string) string {
 		}
 		return m // leave unreplaced if not found
 	})
+}
+
+// issueOAuth2Step acquires a token via client_credentials or refresh_token grant.
+// The response body is not closed — caller must close it.
+func issueOAuth2Step(ctx context.Context, client *http.Client, def *model.OAuth2StepDef, vars map[string]string) (*http.Response, error) {
+	tokenURL := interpolate(def.TokenURL, vars)
+	if tokenURL == "" {
+		return nil, fmt.Errorf("oauth2: token_url is required")
+	}
+	params := url.Values{
+		"grant_type":    {def.Grant},
+		"client_id":     {interpolate(def.ClientID, vars)},
+		"client_secret": {interpolate(def.ClientSecret, vars)},
+	}
+	if def.Scope != "" {
+		params.Set("scope", interpolate(def.Scope, vars))
+	}
+	switch def.Grant {
+	case "client_credentials":
+		// no additional params needed
+	case "refresh_token":
+		rt := interpolate(def.RefreshToken, vars)
+		if rt == "" {
+			return nil, fmt.Errorf("oauth2: refresh_token is required for grant=refresh_token")
+		}
+		params.Set("refresh_token", rt)
+	default:
+		return nil, fmt.Errorf("oauth2: unsupported grant type %q (want: client_credentials|refresh_token)", def.Grant)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(params.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return client.Do(req)
 }
 
 func issueStep(ctx context.Context, client *http.Client, baseURL string, rr *model.RawRequest, vars map[string]string) (*http.Response, error) {

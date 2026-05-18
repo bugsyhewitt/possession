@@ -42,6 +42,15 @@ type rawFlowExtraction struct {
 	} `yaml:"inject"`
 }
 
+type rawOAuth2Step struct {
+	TokenURL     string `yaml:"token_url"`
+	Grant        string `yaml:"grant"`
+	ClientID     string `yaml:"client_id"`
+	ClientSecret string `yaml:"client_secret"`
+	RefreshToken string `yaml:"refresh_token"`
+	Scope        string `yaml:"scope"`
+}
+
 type rawFlowStep struct {
 	Name    string              `yaml:"name"`
 	Request *struct {
@@ -50,6 +59,7 @@ type rawFlowStep struct {
 		Headers map[string]string `yaml:"headers"`
 		Body    string            `yaml:"body"`
 	} `yaml:"request"`
+	OAuth2  *rawOAuth2Step      `yaml:"oauth2"`
 	Extract []rawFlowExtraction `yaml:"extract"`
 }
 
@@ -66,6 +76,7 @@ type rawIdentity struct {
 	Refresh  *rawRefresh     `yaml:"refresh"`
 	Markers  []string        `yaml:"markers"`
 	FlowName string          `yaml:"flow"`
+	Tenant   string          `yaml:"tenant"`
 }
 
 type raw struct {
@@ -77,6 +88,7 @@ type raw struct {
 	Identities []rawIdentity  `yaml:"identities"`
 	Assertions []rawAssertion `yaml:"assertions"`
 	Flows      []rawFlow      `yaml:"flows"`
+	Tenants    []string       `yaml:"tenants"`
 	Scope      struct {
 		Include []string `yaml:"include"`
 		Exclude []string `yaml:"exclude"`
@@ -230,6 +242,7 @@ func toMatrix(rm raw) (*model.RoleMatrix, error) {
 			ident.Refresh = rh
 		}
 		ident.FlowName = ri.FlowName
+		ident.Tenant = ri.Tenant
 		out.Identities = append(out.Identities, ident)
 	}
 	// Parse flows.
@@ -245,6 +258,16 @@ func toMatrix(rm raw) (*model.RoleMatrix, error) {
 						URL:     rs.Request.URL,
 						Headers: rs.Request.Headers,
 						Body:    rs.Request.Body,
+					}
+				}
+				if rs.OAuth2 != nil {
+					step.OAuth2 = &model.OAuth2StepDef{
+						TokenURL:     rs.OAuth2.TokenURL,
+						Grant:        rs.OAuth2.Grant,
+						ClientID:     rs.OAuth2.ClientID,
+						ClientSecret: rs.OAuth2.ClientSecret,
+						RefreshToken: rs.OAuth2.RefreshToken,
+						Scope:        rs.OAuth2.Scope,
 					}
 				}
 				for _, re := range rs.Extract {
@@ -264,6 +287,7 @@ func toMatrix(rm raw) (*model.RoleMatrix, error) {
 			out.Flows[rf.Name] = fd
 		}
 	}
+	out.Tenants = rm.Tenants
 	for _, ra := range rm.Assertions {
 		out.Assertions = append(out.Assertions, model.Assertion{
 			Endpoint: ra.Endpoint,

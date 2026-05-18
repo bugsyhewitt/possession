@@ -19,4 +19,10 @@
 ## Packet 7 — Stateful Flows
 
 [02:41] P7 START — branch packet-07-stateful-flows
+[02:49] P7 tests green (all 11 packages incl. new internal/flow, -race)
+[02:49] P7 BACKUP ok — tag packet-07-complete pushed, bundle possession-packet-07-20260517-224946.bundle verified
+
+## Packet 8 — Tenant Awareness + OAuth2/OIDC
+
+[02:49] P8 START — branch packet-08-tenant-oauth
 

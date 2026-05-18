@@ -14,6 +14,7 @@ type RoleMatrix struct {
 	Settings   RunSettings
 	Assertions []Assertion         // optional declarative access expectations (P6)
 	Flows      map[string]FlowDef  // optional named flow definitions (P7)
+	Tenants    []string            // optional tenant list for cross-tenant IDOR detection (P8)
 }
 
 // FlowDef is a named, ordered sequence of HTTP steps an identity runs to
@@ -26,8 +27,22 @@ type FlowDef struct {
 // FlowStep is one request+extract step within a flow.
 type FlowStep struct {
 	Name    string
-	Request *RawRequest     // if non-nil, issue this request
+	Request *RawRequest      // if non-nil, issue this request
+	OAuth2  *OAuth2StepDef   // if non-nil, acquire an OAuth2 token (P8)
 	Extract []FlowExtraction
+}
+
+// OAuth2StepDef defines an OAuth2 token-acquisition step within a flow.
+// Supports client_credentials and refresh_token grants (P8 / D45).
+type OAuth2StepDef struct {
+	TokenURL     string
+	Grant        string // "client_credentials" | "refresh_token"
+	ClientID     string
+	ClientSecret string
+	// RefreshToken is only used for grant=refresh_token.
+	RefreshToken string
+	// Scope is optional space-separated scope string.
+	Scope string
 }
 
 // FlowExtraction pulls a named value from a step's response and makes it

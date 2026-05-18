@@ -30,6 +30,11 @@ type Identity struct {
 	// establish a live session (Tier-2, P7). Mutually exclusive with Refresh
 	// at the per-identity level; if both are set, the flow takes precedence.
 	FlowName string
+
+	// Tenant is the tenant this identity belongs to (P8 / D31). When set on
+	// both a resource owner and a swap-identity actor and the tenants differ,
+	// the finding class is idor-cross-tenant (critical severity).
+	Tenant string
 }
 
 // Credentials groups the static authentication material attached to an

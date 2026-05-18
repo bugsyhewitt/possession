@@ -91,3 +91,33 @@ Items deliberately left out of v1.0 to keep the scope bounded:
   verified against the published v5.0.0 spec (Gate F — currently
   omitted intentionally).
 - Branch protection / signed releases (post-v1.0 ops).
+
+## v1.2 backlog (deferred from v1.1)
+
+### Auth
+
+- **SAML assertion mutators**: SAML is XML-DSIG — a genuinely separate
+  effort from JWT. Signature stripping, assertion tamper, replay attacks.
+  Requires a SAML-specific parser and signer.
+- **Deep OAuth2/OIDC flows**: PKCE, device_code, implicit (deprecated but
+  still common), state-parameter CSRF attacks, token leakage via redirect.
+  The v1.1 OAuth2 step only covers client_credentials and refresh_token.
+- **WebRTC signaling authz**: WebRTC offer/answer flows carry identity; the
+  authz surface is different from REST APIs. Out of scope for v1.1.
+
+### Detection
+
+- **GraphQL authorization**: GraphQL introspection + field-level authz
+  bypasses are a distinct problem (operation fragments, batching). Needs
+  dedicated mutators and an endpoint-level dedup strategy.
+- **ASVS V9 Self-Contained Token mapping**: Full V9 control IDs once the
+  published v5.0.0 spec is verified stable (Gate F).
+- **privesc to different resource class**: v1.1's comparative evaluator
+  marks "different but still unauthorized resource" as enforced (D44
+  limitation). A future evaluator mode using content-type or schema
+  matching could detect this.
+
+### Infrastructure
+
+- **TUI dashboard**: Live per-endpoint finding counts during a scan.
+- **Postman / OpenAPI input**: Additional input parsers beyond HAR + curl.

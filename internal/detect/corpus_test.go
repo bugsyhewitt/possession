@@ -1622,3 +1622,229 @@ func TestCorpus_P7_SecureApp_ZeroBypass(t *testing.T) {
 	}
 	t.Logf("P7 flow secureapp: zero bypass; verdictCounts=%v findings=%d", verdictCounts, len(findings))
 }
+
+// ─── P8: Tenant Awareness corpus tests ────────────────────────────────
+
+// startVulnAppMultiTenant serves a multi-tenant endpoint that leaks across
+// tenant boundaries: GET /tenants/acme/config returns the acme config regardless
+// of which tenant the authenticated caller belongs to.
+func startVulnAppMultiTenant(t *testing.T) *httptest.Server {
+	mux := http.NewServeMux()
+	configs := map[string]string{
+		"acme":   `{"tenant":"acme","secret":"ACME_SECRET_DATA_9f3b","plan":"enterprise"}`,
+		"globex": `{"tenant":"globex","secret":"GLOBEX_SECRET_DATA_a7c2","plan":"starter"}`,
+	}
+	validTokens := map[string]bool{"acme-tok": true, "globex-tok": true}
+	mux.HandleFunc("/tenants/", func(w http.ResponseWriter, r *http.Request) {
+		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !validTokens[bearer] {
+			writeJSON(w, 401, `{"error":"unauthenticated"}`)
+			return
+		}
+		// Extract tenant from path: /tenants/{tenant}/config
+		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/tenants/"), "/")
+		tenantID := parts[0]
+		data, ok := configs[tenantID]
+		if !ok {
+			writeJSON(w, 404, `{"error":"not found"}`)
+			return
+		}
+		// IDOR: returns the requested tenant's data regardless of caller's tenant.
+		writeJSON(w, 200, data)
+	})
+	return httptest.NewServer(mux)
+}
+
+// startSecureAppMultiTenant properly isolates tenants.
+func startSecureAppMultiTenant(t *testing.T) *httptest.Server {
+	mux := http.NewServeMux()
+	tokenTenants := map[string]string{
+		"acme-tok":   "acme",
+		"globex-tok": "globex",
+	}
+	tenantConfigs := map[string]string{
+		"acme":   `{"tenant":"acme","secret":"ACME_SECRET_DATA_9f3b","plan":"enterprise"}`,
+		"globex": `{"tenant":"globex","secret":"GLOBEX_SECRET_DATA_a7c2","plan":"starter"}`,
+	}
+	mux.HandleFunc("/tenants/", func(w http.ResponseWriter, r *http.Request) {
+		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		callerTenant, ok := tokenTenants[bearer]
+		if !ok {
+			writeJSON(w, 401, `{"error":"unauthenticated"}`)
+			return
+		}
+		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/tenants/"), "/")
+		tenantID := parts[0]
+		// Secure: cross-tenant access is forbidden.
+		if tenantID != callerTenant {
+			writeJSON(w, 403, `{"error":"forbidden: cross-tenant access"}`)
+			return
+		}
+		data, ok := tenantConfigs[tenantID]
+		if !ok {
+			writeJSON(w, 404, `{"error":"not found"}`)
+			return
+		}
+		writeJSON(w, 200, data)
+	})
+	return httptest.NewServer(mux)
+}
+
+// matrixForMultiTenant builds a matrix with two tenants: alice in acme, carol in globex.
+// Alice is the "owner" of the captured /tenants/acme/config request; carol is cross-tenant.
+func matrixForMultiTenant(baseURL string) *model.RoleMatrix {
+	return &model.RoleMatrix{
+		Version: "1",
+		Target:  model.TargetConfig{BaseURL: baseURL},
+		Tenants: []string{"acme", "globex"},
+		Identities: []model.Identity{
+			{Name: "anon", Role: "unauthenticated", Rank: 0},
+			{Name: "alice", Role: "user", Rank: 10, Tenant: "acme",
+				Markers: []string{"ACME_SECRET_DATA_9f3b", "acme", "enterprise"},
+				Creds:   &model.Credentials{Bearer: "acme-tok"}},
+			{Name: "carol", Role: "user", Rank: 10, Tenant: "globex",
+				Markers: []string{"GLOBEX_SECRET_DATA_a7c2", "globex", "starter"},
+				Creds:   &model.Credentials{Bearer: "globex-tok"}},
+		},
+	}
+}
+
+// TestCorpus_P8_VulnApp_CrossTenantFinding: carol (globex tenant) can read
+// alice's (acme tenant) resource → idor-cross-tenant finding expected.
+func TestCorpus_P8_VulnApp_CrossTenantFinding(t *testing.T) {
+	srv := startVulnAppMultiTenant(t)
+	defer srv.Close()
+
+	matrix := matrixForMultiTenant(srv.URL)
+	u, _ := url.Parse(srv.URL + "/tenants/acme/config")
+	h := http.Header{}
+	h.Set("Authorization", "Bearer acme-tok")
+	cap := &model.CapturedRequest{
+		ID: "GET /tenants/acme/config", Method: "GET", URL: u,
+		PathTemplate: "/tenants/{tenant}/config", Headers: h,
+	}
+	ep := &model.Endpoint{
+		Method: "GET", Host: u.Host, PathTemplate: "/tenants/{tenant}/config",
+		Samples: []*model.CapturedRequest{cap},
+	}
+	owner, attr, _ := AttributeOwner(ep.Samples[0], matrix)
+	ep.OwnerIdentity = owner
+	ep.OwnerAttribution = attr
+
+	const baselineN = 3
+	baselinePlan := buildBaselinePlanLocal([]*model.Endpoint{ep}, baselineN)
+	reg := mutate.DefaultRegistry()
+	plan := replay.Generate([]*model.Endpoint{ep}, matrix, reg, 0)
+	rs := model.RunSettings{RatePerHost: 1000, Concurrency: 8, MaxBody: 1024 * 1024}
+	engine := replay.New(rs, "possession-tenant-corpus-test", nil)
+	ctx := t.Context()
+	baselineResp := engine.Run(ctx, baselinePlan)
+	variantResp := engine.Run(ctx, plan)
+
+	epKey := ep.Method + " " + ep.Host + ep.PathTemplate
+	byKey := map[string][]*model.Response{}
+	for i, v := range baselinePlan.Variants {
+		key := variantEndpointKey(&v)
+		r := baselineResp[i]
+		byKey[key] = append(byKey[key], &r)
+	}
+	cal := Calibrate(byKey[epKey])
+	var vrs []VariantResponse
+	for i, v := range plan.Variants {
+		if variantEndpointKey(&v) != epKey {
+			continue
+		}
+		r := variantResp[i]
+		vrs = append(vrs, VariantResponse{Variant: &plan.Variants[i], Response: &r})
+	}
+	verdictCounts := map[string]int{}
+	res := ComparativeEvaluator{}.Evaluate(EvalContext{
+		Endpoint: ep, Owner: ep.OwnerIdentity, Calibration: cal,
+		VariantResponses: vrs, Matrix: matrix,
+	})
+	for _, vv := range res.Verdicts {
+		verdictCounts[vv.Verdict]++
+	}
+
+	crossTenantFound := false
+	for _, f := range res.Findings {
+		if f.Class == "idor-cross-tenant" && (f.Verdict == VerdictBypass || f.Verdict == VerdictSuspected) {
+			crossTenantFound = true
+			break
+		}
+	}
+	if !crossTenantFound {
+		t.Errorf("P8: expected idor-cross-tenant finding; verdictCounts=%v findings:\n%s",
+			verdictCounts, summarizeFindings(res.Findings))
+	}
+	t.Logf("P8 tenant vulnapp: verdictCounts=%v findings=%d", verdictCounts, len(res.Findings))
+}
+
+// TestCorpus_P8_SecureApp_CrossTenant_ZeroBypass — Gate E for tenant isolation.
+// secureapp properly isolates tenants; no cross-tenant bypass expected.
+func TestCorpus_P8_SecureApp_CrossTenant_ZeroBypass(t *testing.T) {
+	srv := startSecureAppMultiTenant(t)
+	defer srv.Close()
+
+	matrix := matrixForMultiTenant(srv.URL)
+	u, _ := url.Parse(srv.URL + "/tenants/acme/config")
+	h := http.Header{}
+	h.Set("Authorization", "Bearer acme-tok")
+	cap := &model.CapturedRequest{
+		ID: "GET /tenants/acme/config", Method: "GET", URL: u,
+		PathTemplate: "/tenants/{tenant}/config", Headers: h,
+	}
+	ep := &model.Endpoint{
+		Method: "GET", Host: u.Host, PathTemplate: "/tenants/{tenant}/config",
+		Samples: []*model.CapturedRequest{cap},
+	}
+	owner, attr, _ := AttributeOwner(ep.Samples[0], matrix)
+	ep.OwnerIdentity = owner
+	ep.OwnerAttribution = attr
+
+	const baselineN = 3
+	baselinePlan := buildBaselinePlanLocal([]*model.Endpoint{ep}, baselineN)
+	reg := mutate.DefaultRegistry()
+	plan := replay.Generate([]*model.Endpoint{ep}, matrix, reg, 0)
+	rs := model.RunSettings{RatePerHost: 1000, Concurrency: 8, MaxBody: 1024 * 1024}
+	engine := replay.New(rs, "possession-tenant-secure-test", nil)
+	ctx := t.Context()
+	baselineResp := engine.Run(ctx, baselinePlan)
+	variantResp := engine.Run(ctx, plan)
+
+	epKey := ep.Method + " " + ep.Host + ep.PathTemplate
+	byKey := map[string][]*model.Response{}
+	for i, v := range baselinePlan.Variants {
+		key := variantEndpointKey(&v)
+		r := baselineResp[i]
+		byKey[key] = append(byKey[key], &r)
+	}
+	cal := Calibrate(byKey[epKey])
+	var vrs []VariantResponse
+	for i, v := range plan.Variants {
+		if variantEndpointKey(&v) != epKey {
+			continue
+		}
+		r := variantResp[i]
+		vrs = append(vrs, VariantResponse{Variant: &plan.Variants[i], Response: &r})
+	}
+	verdictCounts := map[string]int{}
+	res := ComparativeEvaluator{}.Evaluate(EvalContext{
+		Endpoint: ep, Owner: ep.OwnerIdentity, Calibration: cal,
+		VariantResponses: vrs, Matrix: matrix,
+	})
+	for _, vv := range res.Verdicts {
+		verdictCounts[vv.Verdict]++
+	}
+
+	bypassCount := 0
+	for _, f := range res.Findings {
+		if f.Verdict == VerdictBypass {
+			bypassCount++
+		}
+	}
+	if bypassCount > 0 {
+		t.Errorf("P8 Gate E FAILED: %d bypass(es):\n%s", bypassCount, summarizeFindings(res.Findings))
+	}
+	t.Logf("P8 tenant secureapp: zero bypass; verdictCounts=%v findings=%d", verdictCounts, len(res.Findings))
+}

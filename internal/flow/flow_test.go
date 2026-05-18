@@ -262,6 +262,79 @@ func TestExecuteFrom_VolatileRerun(t *testing.T) {
 	}
 }
 
+// ─── OAuth2 step tests ────────────────────────────────────────────────
+
+func TestOAuth2Step_ClientCredentials(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(405)
+			return
+		}
+		if err := r.ParseForm(); err != nil {
+			w.WriteHeader(400)
+			return
+		}
+		if r.FormValue("grant_type") != "client_credentials" {
+			w.WriteHeader(400)
+			_, _ = w.Write([]byte(`{"error":"unsupported_grant_type"}`))
+			return
+		}
+		if r.FormValue("client_id") != "my-client" || r.FormValue("client_secret") != "my-secret" {
+			w.WriteHeader(401)
+			_, _ = w.Write([]byte(`{"error":"invalid_client"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"tok-abc123","token_type":"Bearer","expires_in":3600}`))
+	}))
+	defer srv.Close()
+
+	fd := model.FlowDef{
+		Name: "oauth2-cc",
+		Steps: []model.FlowStep{
+			{
+				Name: "get-token",
+				OAuth2: &model.OAuth2StepDef{
+					TokenURL:     srv.URL + "/token",
+					Grant:        "client_credentials",
+					ClientID:     "my-client",
+					ClientSecret: "my-secret",
+				},
+				Extract: []model.FlowExtraction{
+					{Name: "access_token", From: "body-json", Expr: "$.access_token",
+						Inject: model.Injection{Into: "header", Key: "Authorization"}},
+				},
+			},
+		},
+	}
+	result := Execute(context.Background(), &http.Client{}, "", fd, nil)
+	if result.Err != nil {
+		t.Fatalf("oauth2 execute: %v", result.Err)
+	}
+	if result.Vars["access_token"] != "tok-abc123" {
+		t.Errorf("access_token: want tok-abc123, got %q", result.Vars["access_token"])
+	}
+}
+
+func TestOAuth2Step_InvalidGrant_Error(t *testing.T) {
+	fd := model.FlowDef{
+		Name: "bad-grant",
+		Steps: []model.FlowStep{
+			{
+				Name: "get-token",
+				OAuth2: &model.OAuth2StepDef{
+					TokenURL: "http://localhost:1",
+					Grant:    "password",
+				},
+			},
+		},
+	}
+	result := Execute(context.Background(), &http.Client{}, "", fd, nil)
+	if result.Err == nil {
+		t.Error("expected error for unsupported grant type")
+	}
+}
+
 func containsSubstr(s, sub string) bool {
 	return len(s) >= len(sub) && (s == sub || len(s) > 0 && containsSubstrInner(s, sub))
 }
