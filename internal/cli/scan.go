@@ -21,6 +21,7 @@ import (
 	"github.com/bugsyhewitt/possession/internal/parse"
 	"github.com/bugsyhewitt/possession/internal/replay"
 	"github.com/bugsyhewitt/possession/internal/report"
+	"github.com/bugsyhewitt/possession/internal/suppress"
 )
 
 var (
@@ -40,6 +41,8 @@ var (
 	scanExitZero        bool
 	scanJWTWordlist     string // path to newline-delimited HMAC secret wordlist
 	scanEvaluator       string // evaluator to use: comparative | assertion | both
+	scanAllowlist       string // path to possession.allowlist suppression file
+	scanUpdateAllowlist bool   // merge current findings into the allowlist file
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -79,6 +82,10 @@ func init() {
 		"path to newline-delimited wordlist for jwt-hmac-crack (default: built-in list)")
 	scanCmd.Flags().StringVar(&scanEvaluator, "evaluator", "comparative",
 		"evaluator to use: comparative | assertion | both (default: comparative)")
+	scanCmd.Flags().StringVar(&scanAllowlist, "allowlist", "",
+		"path to a possession.allowlist YAML file; suppresses known findings from output")
+	scanCmd.Flags().BoolVar(&scanUpdateAllowlist, "update-allowlist", false,
+		"merge all findings from this run into --allowlist (creates the file if absent; requires --allowlist)")
 }
 
 func resetScanFlags() {
@@ -98,6 +105,8 @@ func resetScanFlags() {
 	scanExitZero = false
 	scanJWTWordlist = ""
 	scanEvaluator = "comparative"
+	scanAllowlist = ""
+	scanUpdateAllowlist = false
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -107,11 +116,24 @@ func runScan(cmd *cobra.Command, args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("scan: exactly one input file is required")
 	}
+	if scanUpdateAllowlist && scanAllowlist == "" {
+		return fmt.Errorf("scan: --update-allowlist requires --allowlist <path>")
+	}
 	input := args[0]
 
 	matrix, err := config.LoadFile(scanMatrix)
 	if err != nil {
 		return err
+	}
+
+	// Load suppression allowlist (if --allowlist provided). Missing file is
+	// not an error — it just means no suppressions.
+	var allowlist *suppress.Allowlist
+	if scanAllowlist != "" {
+		allowlist, err = suppress.LoadFile(scanAllowlist)
+		if err != nil {
+			return fmt.Errorf("scan: %w", err)
+		}
 	}
 
 	if scanRate == 0 {
@@ -327,6 +349,28 @@ func runScan(cmd *cobra.Command, args []string) error {
 			BaselineFailed:    cal.BaselineFailed,
 			Notes:             notes,
 		})
+	}
+
+	// Allowlist suppression: remove known findings before summary + reporting.
+	// If --update-allowlist is set, merge ALL findings (pre-suppression) into
+	// the allowlist file first, then apply suppression. This way the file
+	// always reflects the full set, and subsequent runs suppress everything
+	// in it.
+	suppressedCount := 0
+	if allowlist != nil {
+		if scanUpdateAllowlist {
+			merged := suppress.Merge(allowlist, suppress.FromFindings(allFindings, "", ""))
+			if werr := suppress.WriteFile(scanAllowlist, merged); werr != nil {
+				fmt.Fprintf(stderr, "warning: could not update allowlist %s: %v\n", scanAllowlist, werr)
+			} else {
+				fmt.Fprintf(stderr, "allowlist updated: %s (%d entries)\n", scanAllowlist, len(merged.Entries))
+				allowlist = merged
+			}
+		}
+		allFindings, suppressedCount = suppress.Apply(allFindings, allowlist)
+		if suppressedCount > 0 {
+			fmt.Fprintf(stderr, "%d finding(s) suppressed by allowlist %s\n", suppressedCount, scanAllowlist)
+		}
 	}
 
 	// Build summary.
