@@ -151,6 +151,52 @@ dedupe across runs. Round-trips through `owenrumney/go-sarif/v3`.
 | 2    | Config error (invalid matrix YAML, unparseable input)                          |
 | 3    | Scan completed with at least one finding (suppressable with `--exit-zero`)     |
 
+## Suppression (allowlist)
+
+possession supports a YAML allowlist file that suppresses known findings
+from output so that only **new** findings surface on re-runs. This is
+particularly useful in CI pipelines where you want `exit 3` to only fire
+on findings introduced by the current change.
+
+```bash
+# First run: scan and write all findings to possession.allowlist.
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --allowlist possession.allowlist \
+    --update-allowlist
+
+# Subsequent runs: suppress every finding already in the allowlist.
+# Exit code 3 only fires if a NEW finding appears.
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --allowlist possession.allowlist
+```
+
+The allowlist file format:
+
+```yaml
+version: "1"
+description: "Optional human-readable note."
+entries:
+  - id: "a1b2c3d4e5f60718"    # deterministic 16-hex Finding.ID
+    added_at: "2026-05-26T18:00:00Z"
+    added_by: "alice"
+    note: "Accepted risk — internal-only endpoint."
+```
+
+| Flag                | Behaviour                                                                      |
+|---------------------|--------------------------------------------------------------------------------|
+| `--allowlist <f>`   | Load suppression file; suppress matching findings from reporters + exit code   |
+| `--update-allowlist`| Merge current findings into `--allowlist` file (creates file if absent)       |
+
+`--update-allowlist` requires `--allowlist`. Missing allowlist file is
+treated as empty — no error — so CI can reference a file that doesn't
+exist yet.
+
+Finding IDs are stable (SHA256 of endpoint key + variant ID + class):
+the same bug produces the same ID on every run against the same target.
+Allowlist entries that no longer match any finding are silently ignored.
+
 ## What ships in v1.0
 
 - 9 mutators total: 5 classic (`strip-auth`, `swap-identity`,
@@ -177,7 +223,7 @@ Deliberately deferred to keep v1.0 scope bounded. See
   place).
 - Stateful login flows (CSRF chains, multi-step OAuth).
 - Postman / OpenAPI / mitmproxy input formats.
-- HTML and Markdown reporters; suppression / baseline file.
+- HTML and Markdown reporters.
 - ASVS V9 (Self-Contained Tokens) control mapping — currently
   omitted (Gate F: not inventing control IDs we can't verify).
 

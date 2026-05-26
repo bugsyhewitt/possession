@@ -80,8 +80,8 @@ Items deliberately left out of v1.0 to keep the scope bounded:
 - HTML reporter (offline interactive view with collapsible signal
   traces).
 - Markdown reporter for PR comments.
-- Suppression / baseline file (`possession.allowlist`) so re-runs only
-  surface new findings.
+- ~~Suppression / baseline file (`possession.allowlist`) so re-runs only
+  surface new findings.~~ **Shipped in v1.2.**
 
 ### Operational
 - Resume on interrupt (persist plan + completed variants to disk).
