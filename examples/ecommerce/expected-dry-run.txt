@@ -1,4 +1,4 @@
-dry-run plan: 2 endpoints, 18 variants, 3 baseline samples per endpoint
+dry-run plan: 2 endpoints, 19 variants, 3 baseline samples per endpoint
 
 ENDPOINT                                       OWNER       ATTRIBUTION              BASELINES
 GET shop.example.test/api/account              alice       exact-bearer             3
@@ -23,3 +23,4 @@ bf0315b4d8f38243  GET     downgrade-role   anon        https://shop.example.test
 a20d9f872073e84b  GET     downgrade-role   alice       https://shop.example.test/api/orders/12345
 8303b8f07bfbf4fc  GET     downgrade-role   bob         https://shop.example.test/api/orders/12345
 0cb66e0bf1487d34  GET     strip-token      -           https://shop.example.test/api/orders/12345
+b32c840a096e177f  GET     swap-object      alice       https://shop.example.test/api/orders/67890

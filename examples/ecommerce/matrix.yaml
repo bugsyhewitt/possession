@@ -20,6 +20,11 @@ identities:
     markers:
       - "alice@example.com"
       - "Alice Liddell"
+    # Object references alice legitimately owns. The swap-object mutator
+    # substitutes another identity's matching value into alice's own
+    # authenticated request — the canonical horizontal-IDOR / BOLA test.
+    resources:
+      order_id: "12345"
 
   - name: bob
     role: customer
@@ -29,6 +34,8 @@ identities:
     markers:
       - "bob@example.com"
       - "Bob Roberts"
+    resources:
+      order_id: "67890"
 
   - name: admin
     role: administrator

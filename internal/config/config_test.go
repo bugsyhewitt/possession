@@ -29,6 +29,50 @@ func TestLoadExampleYAML(t *testing.T) {
 	}
 }
 
+func TestLoadResourcesField(t *testing.T) {
+	const y = `
+version: "1"
+target:
+  base_url: https://api.example.test
+identities:
+  - name: alice
+    role: user
+    rank: 10
+    creds:
+      bearer: alice-token
+    resources:
+      user_id: "1001"
+      order_id: "5523"
+  - name: bob
+    role: user
+    rank: 10
+    creds:
+      bearer: bob-token
+    resources:
+      user_id: "2002"
+      order_id: "6634"
+settings:
+  rate_per_host: 1.0
+  concurrency: 1
+  timeout: 15s
+`
+	m, err := Load(strings.NewReader(y))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(m.Identities) != 2 {
+		t.Fatalf("identities = %d, want 2", len(m.Identities))
+	}
+	alice := m.Identities[0]
+	if alice.Resources["user_id"] != "1001" || alice.Resources["order_id"] != "5523" {
+		t.Errorf("alice resources malformed: %+v", alice.Resources)
+	}
+	bob := m.Identities[1]
+	if bob.Resources["user_id"] != "2002" {
+		t.Errorf("bob resources malformed: %+v", bob.Resources)
+	}
+}
+
 func TestLoadInvalidYAMLReportsBothProblems(t *testing.T) {
 	_, err := LoadFile("../../testdata/matrix/invalid.yaml")
 	if err == nil {

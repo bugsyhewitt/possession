@@ -210,7 +210,7 @@ func MutatorClass(mutatorType string) string {
 	switch mutatorType {
 	case "strip-auth":
 		return "authn-bypass"
-	case "swap-identity":
+	case "swap-identity", "swap-object":
 		return "idor"
 	case "downgrade-role":
 		return "privesc"

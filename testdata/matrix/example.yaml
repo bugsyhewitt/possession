@@ -30,6 +30,14 @@ identities:
     markers:
       - "alice@example.com"
       - "Alice Liddell"
+    # resources (POST_V01 Item 1): object IDs alice legitimately owns. The
+    # swap-object mutator substitutes a peer identity's matching value into
+    # alice's own authenticated request (path/query/JSON body) — the canonical
+    # horizontal-IDOR / BOLA test. Fires only when both identities define
+    # resources sharing a key.
+    resources:
+      user_id: "1001"
+      order_id: "5523"
 
   # A peer of alice — used to test horizontal access (IDOR).
   - name: bob
@@ -40,6 +48,9 @@ identities:
     markers:
       - "bob@example.com"
       - "Bob Roberts"
+    resources:
+      user_id: "2002"
+      order_id: "6634"
 
   # The admin — used to test vertical access (privesc).
   - name: admin

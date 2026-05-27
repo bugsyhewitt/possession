@@ -151,6 +151,8 @@ func DefaultRegistry() *Registry {
 		DowngradeRole{},
 		DropCookie{},
 		StripToken{},
+		// Resource-reference swap (POST_V01 Item 1): horizontal IDOR / BOLA.
+		SwapObject{},
 		// P4: basic JWT attacks
 		JWTAlgNone{},
 		JWTSigStrip{},

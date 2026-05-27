@@ -161,6 +161,7 @@ func TestJWTMutators_DefaultRegistryOrder(t *testing.T) {
 	// P4 basics first, then P5 deep attacks.
 	want := []string{
 		"strip-auth", "swap-identity", "downgrade-role", "drop-cookie", "strip-token",
+		"swap-object",
 		"jwt-alg-none", "jwt-sig-strip", "jwt-claim-tamper", "jwt-resign-weak-key",
 		"jwt-alg-confusion", "jwt-kid-injection", "jwt-jwks-spoof", "jwt-hmac-crack",
 	}

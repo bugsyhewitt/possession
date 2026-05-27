@@ -23,12 +23,21 @@ Pipeline:
 ```
 HAR/curl + role-matrix YAML
     → parse + normalize + scope filter
-    → variant generation (9 mutators × N identities)
+    → variant generation (identity-swap, object-swap, JWT, … × N identities)
     → replay engine (rate-limited, refresh-aware)
     → calibrated baseline + 10-branch verdict ladder
     → Findings (verdict, confidence, severity, ASVS V8 controls)
     → reporter (human | json | sarif)
 ```
+
+possession swaps both halves of an access-control test. The `swap-identity`
+mutator replays a request under *another identity's credentials* (the Autorize
+pattern). The `swap-object` mutator does the inverse — it keeps the original
+caller's credentials and substitutes *another identity's owned object
+reference* into the path, query, and JSON body, expressing the canonical
+horizontal-IDOR / BOLA test: "can alice, using alice's own token, read bob's
+object?" Give each identity a `resources` map (e.g. `order_id: "12345"`) and
+`swap-object` fires automatically.
 
 ## Install
 
@@ -98,18 +107,21 @@ identities:
       bearer: "alice-token"
     markers:
       - "alice@example.com"
+    resources:
+      order_id: "12345"
 ```
 
-| Field                   | Type        | Notes                                                        |
-|-------------------------|-------------|--------------------------------------------------------------|
-| `version`               | string      | Currently must be `"1"`                                      |
-| `target.base_url`       | string      | Used by reporters and as a sanity check on captured requests |
-| `identities[].name`     | string      | Unique per matrix                                            |
-| `identities[].rank`     | int         | 0 = unauth; higher = more privileged                         |
-| `identities[].role`     | string      | Free-form label                                              |
-| `identities[].creds`    | object      | Any of: `bearer`, `cookies`, `headers`, `basic`              |
-| `identities[].markers`  | string list | Unique data strings (email, account ID) — best IDOR signal   |
-| `identities[].refresh`  | object      | Optional Tier-1 dynamic refresh hook                         |
+| Field                    | Type        | Notes                                                        |
+|--------------------------|-------------|--------------------------------------------------------------|
+| `version`                | string      | Currently must be `"1"`                                      |
+| `target.base_url`        | string      | Used by reporters and as a sanity check on captured requests |
+| `identities[].name`      | string      | Unique per matrix                                            |
+| `identities[].rank`      | int         | 0 = unauth; higher = more privileged                         |
+| `identities[].role`      | string      | Free-form label                                              |
+| `identities[].creds`     | object      | Any of: `bearer`, `cookies`, `headers`, `basic`              |
+| `identities[].markers`   | string list | Unique data strings (email, account ID) — best IDOR signal   |
+| `identities[].resources` | string map  | Object IDs this identity owns (`user_id`, `order_id`, …); drives the `swap-object` mutator |
+| `identities[].refresh`   | object      | Optional Tier-1 dynamic refresh hook                         |
 | `scope.include`         | string list | Glob patterns (`/api/**`, `**/*.js`)                         |
 | `scope.exclude`         | string list | Same syntax                                                  |
 | `settings.rate_per_host`| float       | Default 10                                                   |

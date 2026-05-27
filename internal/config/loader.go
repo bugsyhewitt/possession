@@ -52,7 +52,7 @@ type rawOAuth2Step struct {
 }
 
 type rawFlowStep struct {
-	Name    string              `yaml:"name"`
+	Name    string `yaml:"name"`
 	Request *struct {
 		Method  string            `yaml:"method"`
 		URL     string            `yaml:"url"`
@@ -69,19 +69,20 @@ type rawFlow struct {
 }
 
 type rawIdentity struct {
-	Name     string          `yaml:"name"`
-	Role     string          `yaml:"role"`
-	Rank     int             `yaml:"rank"`
-	Creds    *rawCredentials `yaml:"creds"`
-	Refresh  *rawRefresh     `yaml:"refresh"`
-	Markers  []string        `yaml:"markers"`
-	FlowName string          `yaml:"flow"`
-	Tenant   string          `yaml:"tenant"`
+	Name      string            `yaml:"name"`
+	Role      string            `yaml:"role"`
+	Rank      int               `yaml:"rank"`
+	Creds     *rawCredentials   `yaml:"creds"`
+	Refresh   *rawRefresh       `yaml:"refresh"`
+	Markers   []string          `yaml:"markers"`
+	FlowName  string            `yaml:"flow"`
+	Tenant    string            `yaml:"tenant"`
+	Resources map[string]string `yaml:"resources"`
 }
 
 type raw struct {
-	Version    string `yaml:"version"`
-	Target     struct {
+	Version string `yaml:"version"`
+	Target  struct {
 		BaseURL string  `yaml:"base_url"`
 		JWT     *rawJWT `yaml:"jwt"`
 	} `yaml:"target"`
@@ -201,10 +202,11 @@ func toMatrix(rm raw) (*model.RoleMatrix, error) {
 
 	for _, ri := range rm.Identities {
 		ident := model.Identity{
-			Name:    ri.Name,
-			Role:    ri.Role,
-			Rank:    ri.Rank,
-			Markers: ri.Markers,
+			Name:      ri.Name,
+			Role:      ri.Role,
+			Rank:      ri.Rank,
+			Markers:   ri.Markers,
+			Resources: ri.Resources,
 		}
 		if ri.Creds != nil {
 			ident.Creds = &model.Credentials{

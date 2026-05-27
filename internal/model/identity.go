@@ -35,6 +35,16 @@ type Identity struct {
 	// both a resource owner and a swap-identity actor and the tenants differ,
 	// the finding class is idor-cross-tenant (critical severity).
 	Tenant string
+
+	// Resources maps a logical resource-reference name to the object ID this
+	// identity legitimately owns — e.g. {"user_id": "1001", "order_id": "5523"}.
+	// The swap-object mutator (POST_V01 Item 1) substitutes another identity's
+	// resource value into path segments, query params, and JSON body fields
+	// while keeping the original caller's credentials unchanged, expressing the
+	// canonical horizontal-IDOR / BOLA test ("can alice read bob's object?").
+	// Empty by default for backward compatibility; swap-object only fires when
+	// both source and target identities have Resources defined.
+	Resources map[string]string
 }
 
 // Credentials groups the static authentication material attached to an

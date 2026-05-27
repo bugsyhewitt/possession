@@ -195,6 +195,7 @@ func TestRegistry_DeclarationOrder(t *testing.T) {
 	r := DefaultRegistry()
 	want := []string{
 		"strip-auth", "swap-identity", "downgrade-role", "drop-cookie", "strip-token",
+		"swap-object",
 		"jwt-alg-none", "jwt-sig-strip", "jwt-claim-tamper", "jwt-resign-weak-key",
 		"jwt-alg-confusion", "jwt-kid-injection", "jwt-jwks-spoof", "jwt-hmac-crack",
 	}
