@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -43,6 +45,7 @@ var (
 	scanEvaluator       string // evaluator to use: comparative | assertion | both
 	scanAllowlist       string // path to possession.allowlist suppression file
 	scanUpdateAllowlist bool   // merge current findings into the allowlist file
+	scanEnumerate       int    // --enumerate N: sequential ID enumeration range (0 = off)
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -86,6 +89,8 @@ func init() {
 		"path to a possession.allowlist YAML file; suppresses known findings from output")
 	scanCmd.Flags().BoolVar(&scanUpdateAllowlist, "update-allowlist", false,
 		"merge all findings from this run into --allowlist (creates the file if absent; requires --allowlist)")
+	scanCmd.Flags().IntVar(&scanEnumerate, "enumerate", 0,
+		"sequential ID enumeration range N: probe captured±N neighbors for numeric path segments (0 = disabled; rate-sensitive, use with --rate)")
 }
 
 func resetScanFlags() {
@@ -107,6 +112,7 @@ func resetScanFlags() {
 	scanEvaluator = "comparative"
 	scanAllowlist = ""
 	scanUpdateAllowlist = false
+	scanEnumerate = 0
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -199,7 +205,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// derived from its representative sample's auth components.
 	attributionWarnings := attributeEndpoints(endpoints, matrix)
 
-	reg, err := buildRegistry(scanJWTWordlist)
+	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate)
 	if err != nil {
 		return err
 	}
@@ -350,6 +356,12 @@ func runScan(cmd *cobra.Command, args []string) error {
 			Notes:             notes,
 		})
 	}
+
+	// Cluster enumerate-id findings: collapse N per-probe-ID findings for
+	// the same endpoint into one summary idor finding with an evidence list.
+	// This keeps the finding count readable when --enumerate produces a large
+	// sweep (20+ probes per endpoint).
+	allFindings = clusterEnumerateFindings(allFindings)
 
 	// Allowlist suppression: remove known findings before summary + reporting.
 	// If --update-allowlist is set, merge ALL findings (pre-suppression) into
@@ -711,6 +723,109 @@ func writeDryRun(w io.Writer, plan replay.Plan, endpoints []*model.Endpoint, bas
 	return nil
 }
 
+// clusterEnumerateFindings collapses multiple enumerate-id findings for the
+// same endpoint into a single clustered idor finding. Each original finding
+// becomes a note line in the clustered finding's Evidence.Notes so the probe
+// details are not lost. Non-enumerate-id findings pass through unchanged.
+//
+// Clustering rules:
+//   - Group by EndpointKey.
+//   - Within a group, take the highest-confidence finding as the representative
+//     (it carries the most informative Evidence baseline/variant status).
+//   - Append one "hit: probe_id=<id> status=<s>" note per grouped finding.
+//   - The clustered finding ID is re-derived from the endpoint key alone so it
+//     stays stable across sweeps of different sizes.
+func clusterEnumerateFindings(findings []model.Finding) []model.Finding {
+	// Fast path: no enumerate-id findings at all.
+	hasEnum := false
+	for _, f := range findings {
+		if f.Mutation == "enumerate-id" {
+			hasEnum = true
+			break
+		}
+	}
+	if !hasEnum {
+		return findings
+	}
+
+	// Separate enumerate-id from other findings.
+	var enumFindings []model.Finding
+	var others []model.Finding
+	for _, f := range findings {
+		if f.Mutation == "enumerate-id" {
+			enumFindings = append(enumFindings, f)
+		} else {
+			others = append(others, f)
+		}
+	}
+
+	// Group enumerate-id findings by endpoint key.
+	type group struct {
+		best   model.Finding
+		probes []model.Finding
+	}
+	groups := make(map[string]*group)
+	order := []string{} // preserve first-seen order for deterministic output
+	for _, f := range enumFindings {
+		g, ok := groups[f.EndpointKey]
+		if !ok {
+			g = &group{}
+			groups[f.EndpointKey] = g
+			order = append(order, f.EndpointKey)
+		}
+		if f.Confidence > g.best.Confidence {
+			g.best = f
+		}
+		g.probes = append(g.probes, f)
+	}
+
+	// Build one clustered finding per endpoint group.
+	clustered := make([]model.Finding, 0, len(groups))
+	for _, key := range order {
+		g := groups[key]
+		cf := g.best
+		notes := make([]string, 0, len(g.probes)+1)
+		notes = append(notes, fmt.Sprintf("enumerate-id sweep: %d responsive probes", len(g.probes)))
+		// Sort probes by probe_id for a deterministic note order.
+		sort.Slice(g.probes, func(i, j int) bool {
+			return g.probes[i].Evidence.VariantStatus < g.probes[j].Evidence.VariantStatus ||
+				(g.probes[i].Evidence.VariantStatus == g.probes[j].Evidence.VariantStatus &&
+					probeIDStr(g.probes[i]) < probeIDStr(g.probes[j]))
+		})
+		for _, p := range g.probes {
+			notes = append(notes, fmt.Sprintf("hit: probe_id=%s status=%d similarity=%.2f",
+				probeIDStr(p), p.Evidence.VariantStatus, p.Evidence.SimilarityScore))
+		}
+		cf.Evidence.Notes = notes
+		// Override ID with a stable key derived only from the endpoint so
+		// repeated sweeps produce the same finding ID.
+		cf.ID = clusterFindingID(key)
+		cf.VariantID = "clustered"
+		clustered = append(clustered, cf)
+	}
+
+	return append(others, clustered...)
+}
+
+// probeIDStr extracts the probe_id detail from a Finding's Variant, falling
+// back to the VariantID when the detail is unavailable.
+func probeIDStr(f model.Finding) string {
+	if f.Variant != nil && f.Variant.Mutation.Detail != nil {
+		if v, ok := f.Variant.Mutation.Detail["probe_id"]; ok {
+			return v
+		}
+	}
+	return f.VariantID
+}
+
+// clusterFindingID produces a stable 16-hex-char ID for a clustered
+// enumerate-id finding, keyed only on the endpoint so it is stable across
+// sweeps of different sizes.
+func clusterFindingID(endpointKey string) string {
+	h := sha256.Sum256([]byte(endpointKey + "|enumerate-id|clustered"))
+	return hex.EncodeToString(h[:])[:16]
+}
+
 func parseSize(s string) (int64, error) {
 	s = strings.TrimSpace(strings.ToUpper(s))
 	if s == "" {
@@ -758,11 +873,17 @@ func buildEvaluator(name string, matrix *model.RoleMatrix) (detect.Evaluator, er
 	}
 }
 
-// buildRegistry returns the default mutator registry, optionally replacing
-// jwt-hmac-crack's wordlist with the contents of wordlistPath.
-func buildRegistry(wordlistPath string) (*mutate.Registry, error) {
+// buildRegistry returns the mutator registry, optionally replacing
+// jwt-hmac-crack's wordlist with the contents of wordlistPath and enabling
+// the EnumerateID mutator when enumerateN > 0.
+func buildRegistry(wordlistPath string, enumerateN int) (*mutate.Registry, error) {
+	enumMutator := mutate.EnumerateID{N: enumerateN}
+
 	if wordlistPath == "" {
-		return mutate.DefaultRegistry(), nil
+		// Extend the default registry with EnumerateID (no-op when N==0).
+		base := mutate.DefaultRegistry()
+		all := append(base.All(), enumMutator)
+		return mutate.NewRegistry(all...), nil
 	}
 	data, err := os.ReadFile(wordlistPath)
 	if err != nil {
@@ -779,6 +900,7 @@ func buildRegistry(wordlistPath string) (*mutate.Registry, error) {
 		mutate.DowngradeRole{},
 		mutate.DropCookie{},
 		mutate.StripToken{},
+		mutate.SwapObject{},
 		mutate.JWTAlgNone{},
 		mutate.JWTSigStrip{},
 		mutate.JWTClaimTamper{},
@@ -787,6 +909,7 @@ func buildRegistry(wordlistPath string) (*mutate.Registry, error) {
 		mutate.JWTKidInjection{},
 		mutate.JWTJwksSpoof{},
 		mutate.JWTHmacCrack{Wordlist: words},
+		enumMutator,
 	), nil
 }
 
