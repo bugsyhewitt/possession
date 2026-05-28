@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Postman Collection v2 input parser** (`internal/parse/postman.go`): `scan`
+  and `parse` now accept a Postman Collection v2.0/v2.1 export (the format the
+  Postman app produces) as a fourth input format alongside HAR, curl, and
+  OpenAPI 3.x. Folders are walked recursively; each request item becomes one
+  `CapturedRequest`. The URL is read from the structured `url` object
+  (`protocol`/`host`/`path`/`query`) or a bare string URL, dropping disabled
+  query params; headers come from `request.header[]` (disabled entries
+  skipped); bodies are read for `raw` (JSON content type inferred from
+  `options.raw.language`), `urlencoded`, and text `formdata` modes.
+  `{{variables}}` resolve from collection-, folder-, and request-level
+  `variable[]` arrays with the innermost scope winning, and unbound
+  `{{name}}` placeholders are left literal so missing variables stay visible.
+  Auto-detection distinguishes Postman from HAR (both JSON objects) via the
+  `collection/v2` schema marker, `_postman_id`, or the `info`+`item` pairing;
+  override with `--format postman`. Postman v1 collections are rejected with a
+  hint to re-export as v2.1. Synthesized endpoints feed every mutator exactly
+  like HAR/curl/OpenAPI captures. (POST_V01: next self-contained input-coverage
+  item; Items 1–7 already shipped.)
+
 - **BOLA confidence band** (POST_V01 Item 5): every finding now carries a
   categorical `confidence_band` (`high`/`medium`/`low`) alongside the numeric
   `confidence`, derived from both the numeric confidence and the variant

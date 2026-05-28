@@ -21,7 +21,7 @@ you can invoke from a Makefile, a pipeline, or a Pho3nix-style harness.
 Pipeline:
 
 ```
-HAR/curl/OpenAPI + role-matrix YAML
+HAR/curl/OpenAPI/Postman + role-matrix YAML
     → parse + normalize + scope filter
     → variant generation (identity-swap, object-swap, JWT, … × N identities)
     → replay engine (rate-limited, refresh-aware)
@@ -94,14 +94,15 @@ a full walkthrough.
 
 ## Input formats
 
-`scan` and `parse` accept three capture formats, auto-detected by extension
-and content (override with `--format har|curl|openapi`):
+`scan` and `parse` accept four capture formats, auto-detected by extension
+and content (override with `--format har|curl|openapi|postman`):
 
 | Format    | Detected by                              | Produces                          |
 |-----------|------------------------------------------|-----------------------------------|
-| `har`     | `.har`, or JSON without an `openapi` key | one request per surviving entry   |
+| `har`     | `.har`, or JSON with a `log` key         | one request per surviving entry   |
 | `curl`    | leading `curl`                           | one request                       |
 | `openapi` | `.yaml`/`.yml`, or JSON with an `openapi`/`swagger` key | one request per operation |
+| `postman` | JSON with a `collection/v2` schema marker, `_postman_id`, or `info`+`item` | one request per request item |
 
 ### OpenAPI 3.x
 
@@ -132,6 +133,34 @@ This is a pragmatic subset — external `$ref`s and full `oneOf`/`anyOf`
 composition are not evaluated — but it covers the paths + required params +
 example bodies that most real specs carry. Synthesized endpoints feed every
 mutator, including `swap-object`, exactly like HAR/curl captures.
+
+### Postman Collection v2
+
+Point possession at a Postman Collection v2.0/v2.1 export (the format the
+Postman app produces) to test a saved request library without re-capturing it
+as a HAR:
+
+```bash
+possession scan api.postman_collection.json \
+    --matrix matrix.yaml \
+    --dry-run
+```
+
+For each request item (folders are walked recursively) possession synthesizes a
+replayable request:
+
+- the URL is read from the structured `url` object (`protocol`/`host`/`path`/
+  `query`) or a bare string URL; disabled query params are dropped;
+- headers come from `request.header[]`, skipping entries marked `disabled`;
+- the body is read for `raw` (JSON content type inferred from
+  `options.raw.language`), `urlencoded`, and text `formdata` modes — file parts
+  and `graphql`/`file` body modes synthesize no body;
+- `{{variables}}` are resolved from the collection-, folder-, and request-level
+  `variable[]` arrays, with the innermost scope winning; an unbound `{{name}}`
+  is left literal so missing variables stay visible rather than silently blank.
+
+Synthesized endpoints feed every mutator exactly like HAR/curl/OpenAPI
+captures. Postman v1 collections are rejected with a hint to re-export as v2.1.
 
 ## Token-level JWT attacks (`--jwt-attack`)
 
@@ -416,7 +445,7 @@ changes, and re-scanning a target you only have permission to hit once.
   `downgrade-role`, `drop-cookie`, `strip-token`) + 4 JWT
   (`jwt-alg-none`, `jwt-sig-strip`, `jwt-claim-tamper`,
   `jwt-resign-weak-key`).
-- HAR + curl + OpenAPI 3.x input.
+- HAR + curl + OpenAPI 3.x + Postman v2 input.
 - Per-host token-bucket rate limiter, bounded concurrency, adaptive
   429/503 backoff, Tier-1 dynamic refresh hooks.
 - Calibrated N-sample baseline, 10-branch verdict ladder, ASVS V8
@@ -436,7 +465,7 @@ Deliberately deferred to keep v1.0 scope bounded. See
 - Declarative AuthMatrix-style evaluator (the interface seam is in
   place).
 - Stateful login flows (CSRF chains, multi-step OAuth).
-- Postman / mitmproxy input formats.
+- mitmproxy input format (Postman v2 shipped post-v0.1).
 - HTML reporter (the Markdown reporter shipped post-v0.1).
 - ASVS V9 (Self-Contained Tokens) control mapping — currently
   omitted (Gate F: not inventing control IDs we can't verify).

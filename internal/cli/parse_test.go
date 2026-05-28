@@ -109,6 +109,31 @@ func TestParseCommandOpenAPIAutoDetectYAML(t *testing.T) {
 	}
 }
 
+func TestParseCommandPostmanExplicit(t *testing.T) {
+	out, err := runCmd(t, "parse", "../../testdata/postman/shop.postman_collection.json", "--format", "postman")
+	if err != nil {
+		t.Fatalf("parse: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "/accounts/{id}") {
+		t.Errorf("expected templated Postman endpoint in output:\n%s", out)
+	}
+	if !strings.Contains(out, "/health") {
+		t.Errorf("expected /health endpoint in output:\n%s", out)
+	}
+}
+
+func TestParseCommandPostmanAutoDetect(t *testing.T) {
+	// The collection starts with '{' like a HAR — auto-detect must use the
+	// Postman schema marker to disambiguate.
+	out, err := runCmd(t, "parse", "../../testdata/postman/shop.postman_collection.json")
+	if err != nil {
+		t.Fatalf("parse auto: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "/accounts/{id}") {
+		t.Errorf("auto-detect failed to route collection to postman:\n%s", out)
+	}
+}
+
 func TestDetectFormatOpenAPI(t *testing.T) {
 	cases := []struct {
 		path, requested, want string
@@ -116,7 +141,9 @@ func TestDetectFormatOpenAPI(t *testing.T) {
 		{"../../testdata/openapi/petstore.json", "auto", "openapi"},
 		{"../../testdata/openapi/minimal.yaml", "auto", "openapi"},
 		{"../../testdata/har/ecommerce.har", "auto", "har"},
+		{"../../testdata/postman/shop.postman_collection.json", "auto", "postman"},
 		{"x", "openapi", "openapi"},
+		{"x", "postman", "postman"},
 	}
 	for _, c := range cases {
 		got, err := detectFormat(c.path, c.requested)

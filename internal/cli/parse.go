@@ -26,7 +26,7 @@ var (
 
 func init() {
 	parseCmd.Flags().StringVar(&parseFormat, "format", "auto",
-		"input format: har | curl | openapi | auto")
+		"input format: har | curl | openapi | postman | auto")
 	parseCmd.Flags().StringVar(&parseScope, "scope", "",
 		"path to a role-matrix YAML; its scope.include/exclude is applied as a filter")
 	parseCmd.Flags().BoolVar(&parseJSON, "json", false,
@@ -35,7 +35,7 @@ func init() {
 
 var parseCmd = &cobra.Command{
 	Use:   "parse <input>",
-	Short: "Parse a HAR, curl, or OpenAPI 3.x capture and print deduplicated endpoints.",
+	Short: "Parse a HAR, curl, OpenAPI 3.x, or Postman v2 capture and print deduplicated endpoints.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		input := args[0]
@@ -62,6 +62,8 @@ var parseCmd = &cobra.Command{
 			}
 		case "openapi":
 			requests, err = parse.OpenAPI(f)
+		case "postman":
+			requests, err = parse.Postman(f)
 		default:
 			return fmt.Errorf("parse: unknown format %q", format)
 		}
@@ -92,7 +94,7 @@ var parseCmd = &cobra.Command{
 // sniffing (first non-space byte).
 func detectFormat(path, requested string) (string, error) {
 	switch strings.ToLower(requested) {
-	case "har", "curl", "openapi":
+	case "har", "curl", "openapi", "postman":
 		return strings.ToLower(requested), nil
 	case "", "auto":
 		// fall through
@@ -110,8 +112,8 @@ func detectFormat(path, requested string) (string, error) {
 		return "openapi", nil
 	}
 
-	// Sniff a larger window so we can distinguish OpenAPI JSON from HAR JSON
-	// (both start with '{') by looking for the "openapi"/"swagger" key.
+	// Sniff a larger window so we can distinguish the JSON-object formats
+	// (OpenAPI, Postman, HAR — all start with '{') by their signature keys.
 	f, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("parse: sniff %s: %w", path, err)
@@ -126,6 +128,9 @@ func detectFormat(path, requested string) (string, error) {
 		if b == '{' {
 			if looksLikeOpenAPI(buf) {
 				return "openapi", nil
+			}
+			if looksLikePostman(buf) {
+				return "postman", nil
 			}
 			return "har", nil
 		}
@@ -143,6 +148,27 @@ func detectFormat(path, requested string) (string, error) {
 func looksLikeOpenAPI(buf []byte) bool {
 	s := string(buf)
 	return strings.Contains(s, "\"openapi\"") || strings.Contains(s, "\"swagger\"")
+}
+
+// looksLikePostman reports whether a JSON head carries Postman Collection v2
+// markers — the schema URL, the Postman ID field, or the canonical
+// info{}+item[] pairing — distinguishing it from a HAR (which has a "log" key).
+func looksLikePostman(buf []byte) bool {
+	s := string(buf)
+	if strings.Contains(s, "schema.getpostman.com/json/collection/v2") ||
+		strings.Contains(s, "collection/v2.") {
+		return true
+	}
+	if strings.Contains(s, "\"_postman_id\"") {
+		return true
+	}
+	// HAR's distinctive top-level key is "log"; if the head has Postman's
+	// info+item pairing and lacks "log", treat it as Postman.
+	if strings.Contains(s, "\"info\"") && strings.Contains(s, "\"item\"") &&
+		!strings.Contains(s, "\"log\"") {
+		return true
+	}
+	return false
 }
 
 func applyScope(reqs []*model.CapturedRequest, scope model.ScopeConfig) []*model.CapturedRequest {
