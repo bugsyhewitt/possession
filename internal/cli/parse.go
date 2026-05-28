@@ -26,7 +26,7 @@ var (
 
 func init() {
 	parseCmd.Flags().StringVar(&parseFormat, "format", "auto",
-		"input format: har | curl | auto")
+		"input format: har | curl | openapi | auto")
 	parseCmd.Flags().StringVar(&parseScope, "scope", "",
 		"path to a role-matrix YAML; its scope.include/exclude is applied as a filter")
 	parseCmd.Flags().BoolVar(&parseJSON, "json", false,
@@ -35,7 +35,7 @@ func init() {
 
 var parseCmd = &cobra.Command{
 	Use:   "parse <input>",
-	Short: "Parse a HAR or curl capture and print deduplicated endpoints.",
+	Short: "Parse a HAR, curl, or OpenAPI 3.x capture and print deduplicated endpoints.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		input := args[0]
@@ -60,6 +60,8 @@ var parseCmd = &cobra.Command{
 			if req != nil {
 				requests = []*model.CapturedRequest{req}
 			}
+		case "openapi":
+			requests, err = parse.OpenAPI(f)
 		default:
 			return fmt.Errorf("parse: unknown format %q", format)
 		}
@@ -90,7 +92,7 @@ var parseCmd = &cobra.Command{
 // sniffing (first non-space byte).
 func detectFormat(path, requested string) (string, error) {
 	switch strings.ToLower(requested) {
-	case "har", "curl":
+	case "har", "curl", "openapi":
 		return strings.ToLower(requested), nil
 	case "", "auto":
 		// fall through
@@ -98,22 +100,33 @@ func detectFormat(path, requested string) (string, error) {
 		return "", fmt.Errorf("parse: unknown --format %q", requested)
 	}
 
-	if strings.EqualFold(filepath.Ext(path), ".har") {
+	// Extension hints first. OpenAPI specs are commonly .yaml/.yml/.json, but
+	// .json overlaps with HAR, so YAML extensions are the only unambiguous
+	// extension hint; JSON/.har still get content-sniffed below.
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".har":
 		return "har", nil
+	case ".yaml", ".yml":
+		return "openapi", nil
 	}
-	// Sniff: read up to 256 bytes, find the first non-space byte.
+
+	// Sniff a larger window so we can distinguish OpenAPI JSON from HAR JSON
+	// (both start with '{') by looking for the "openapi"/"swagger" key.
 	f, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("parse: sniff %s: %w", path, err)
 	}
 	defer f.Close()
 	r := bufio.NewReader(f)
-	buf, _ := r.Peek(256)
+	buf, _ := r.Peek(4096)
 	for _, b := range buf {
 		if b == ' ' || b == '\t' || b == '\n' || b == '\r' {
 			continue
 		}
 		if b == '{' {
+			if looksLikeOpenAPI(buf) {
+				return "openapi", nil
+			}
 			return "har", nil
 		}
 		if b == 'c' || b == 'C' {
@@ -122,6 +135,14 @@ func detectFormat(path, requested string) (string, error) {
 		break
 	}
 	return "", fmt.Errorf("parse: could not auto-detect format for %s (pass --format)", path)
+}
+
+// looksLikeOpenAPI reports whether a JSON head contains a top-level-ish
+// "openapi" or "swagger" version marker, distinguishing OpenAPI specs from
+// HAR documents (both of which are JSON objects).
+func looksLikeOpenAPI(buf []byte) bool {
+	s := string(buf)
+	return strings.Contains(s, "\"openapi\"") || strings.Contains(s, "\"swagger\"")
 }
 
 func applyScope(reqs []*model.CapturedRequest, scope model.ScopeConfig) []*model.CapturedRequest {
