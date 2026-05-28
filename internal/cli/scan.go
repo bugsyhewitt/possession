@@ -48,6 +48,7 @@ var (
 	scanEnumerate       int    // --enumerate N: sequential ID enumeration range (0 = off)
 	scanJWTAttack       bool   // --jwt-attack: forge alg:none + blank-secret tokens (off by default)
 	scanReproCreds      bool   // --repro-creds: emit live credentials in markdown repro blocks (off by default)
+	scanLearnMarkers    bool   // --learn-markers: harvest per-identity markers from owner baselines (off by default)
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -97,6 +98,8 @@ func init() {
 		"forge token-level auth-bypass JWTs for each captured Bearer token: alg:none + blank-secret (off by default; noisier than identity swap)")
 	scanCmd.Flags().BoolVar(&scanReproCreds, "repro-creds", false,
 		"emit live credential values in --report markdown reproduction blocks (off by default; repros redact tokens to <bearer:identity> placeholders so reports are safe to paste publicly)")
+	scanCmd.Flags().BoolVar(&scanLearnMarkers, "learn-markers", false,
+		"learn each identity's unique data markers automatically from owner-baseline responses (augments, never overrides, matrix-supplied markers; strengthens the decisive owner-reflection IDOR signal)")
 }
 
 func resetScanFlags() {
@@ -121,6 +124,7 @@ func resetScanFlags() {
 	scanEnumerate = 0
 	scanJWTAttack = false
 	scanReproCreds = false
+	scanLearnMarkers = false
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -261,6 +265,22 @@ func runScan(cmd *cobra.Command, args []string) error {
 		baselineByEndpoint[key] = append(baselineByEndpoint[key], &r)
 	}
 
+	// Marker harvesting (POST_V01 Item 5). When --learn-markers is set, learn
+	// each identity's unique data strings from its owner-baseline responses and
+	// augment that identity's Markers across every place detection reads them.
+	// Augment-only: operator-supplied markers are preserved and never dropped.
+	var markersLearned int
+	var learnedDetail []string
+	if scanLearnMarkers {
+		markersLearned, learnedDetail = learnMarkers(baselinePlan, baselineResponses, matrix, endpoints, plan)
+		if markersLearned > 0 {
+			fmt.Fprintf(stderr, "learned %d marker(s) from owner baselines: %s\n",
+				markersLearned, strings.Join(learnedDetail, ", "))
+		} else {
+			fmt.Fprintln(stderr, "--learn-markers: no unique, stable markers found in owner baselines")
+		}
+	}
+
 	// Detection — per endpoint.
 	ev, err := buildEvaluator(scanEvaluator, matrix)
 	if err != nil {
@@ -350,20 +370,20 @@ func runScan(cmd *cobra.Command, args []string) error {
 			owner = ep.OwnerIdentity.Name
 		}
 		endpointReports = append(endpointReports, endpointReport{
-			Key:               key,
-			Method:            ep.Method,
-			Host:              ep.Host,
-			PathTemplate:      ep.PathTemplate,
-			Owner:             owner,
-			OwnerAttribution:  ownerAttr,
-			BaselineSamples:   cal.Samples,
-			BaselineStatus:    cal.BaselineStatus,
-			Stability:         cal.Stability,
-			EffThreshold:      cal.EffThreshold,
-			Noisy:             cal.Noisy,
+			Key:                key,
+			Method:             ep.Method,
+			Host:               ep.Host,
+			PathTemplate:       ep.PathTemplate,
+			Owner:              owner,
+			OwnerAttribution:   ownerAttr,
+			BaselineSamples:    cal.Samples,
+			BaselineStatus:     cal.BaselineStatus,
+			Stability:          cal.Stability,
+			EffThreshold:       cal.EffThreshold,
+			Noisy:              cal.Noisy,
 			CalibrationSkipped: cal.Skipped,
-			BaselineFailed:    cal.BaselineFailed,
-			Notes:             notes,
+			BaselineFailed:     cal.BaselineFailed,
+			Notes:              notes,
 		})
 	}
 
@@ -490,6 +510,90 @@ func attributeEndpoints(endpoints []*model.Endpoint, matrix *model.RoleMatrix) [
 		}
 	}
 	return warnings
+}
+
+// learnMarkers harvests per-identity markers from the owner-baseline responses
+// (POST_V01 Item 5) and augments those markers everywhere detection reads them:
+// the matrix identities, each endpoint's OwnerIdentity, and every variant's
+// Identity. Augment-only — operator-supplied markers are never dropped or
+// overridden. Returns the total number of markers added and a sorted, human
+// readable per-identity summary for stderr surfacing.
+//
+// Baseline variants carry the owning identity in their Identity field and align
+// index-for-index with baselineResponses, so grouping bodies by identity name
+// is a direct walk of the baseline plan.
+func learnMarkers(
+	baselinePlan replay.Plan,
+	baselineResponses []model.Response,
+	matrix *model.RoleMatrix,
+	endpoints []*model.Endpoint,
+	plan replay.Plan,
+) (int, []string) {
+	// Group baseline response bodies by owning identity name.
+	bodiesByIdentity := make(map[string][][]byte)
+	for i := range baselinePlan.Variants {
+		v := &baselinePlan.Variants[i]
+		if v.Identity == nil || v.Identity.Name == "" {
+			continue
+		}
+		if i >= len(baselineResponses) {
+			continue
+		}
+		body := baselineResponses[i].Body
+		if len(body) == 0 {
+			continue
+		}
+		name := v.Identity.Name
+		bodiesByIdentity[name] = append(bodiesByIdentity[name], body)
+	}
+
+	learned := detect.HarvestMarkers(bodiesByIdentity)
+	if len(learned) == 0 {
+		return 0, nil
+	}
+
+	// Apply the learned markers by identity name everywhere detection reads
+	// them. AttributeOwner copies matrix identities, so ep.OwnerIdentity and
+	// plan variant identities are distinct pointers — augment all of them.
+	total := 0
+	applied := map[string]int{}
+	apply := func(id *model.Identity) {
+		if id == nil {
+			return
+		}
+		toks, ok := learned[id.Name]
+		if !ok {
+			return
+		}
+		merged, added := detect.MergeMarkers(id.Markers, toks)
+		id.Markers = merged
+		if added > applied[id.Name] {
+			applied[id.Name] = added
+		}
+	}
+	for i := range matrix.Identities {
+		apply(&matrix.Identities[i])
+	}
+	for _, ep := range endpoints {
+		if ep != nil {
+			apply(ep.OwnerIdentity)
+		}
+	}
+	for i := range plan.Variants {
+		apply(plan.Variants[i].Identity)
+	}
+
+	names := make([]string, 0, len(applied))
+	for n := range applied {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	summary := make([]string, 0, len(names))
+	for _, n := range names {
+		total += applied[n]
+		summary = append(summary, fmt.Sprintf("%s+%d", n, applied[n]))
+	}
+	return total, summary
 }
 
 // buildBaselinePlan creates N owner-baseline replay variants per endpoint.

@@ -205,6 +205,38 @@ identities:
 
 Full annotated reference: [`testdata/matrix/example.yaml`](testdata/matrix/example.yaml).
 
+### Learning markers automatically (`--learn-markers`)
+
+`markers` are possession's most decisive IDOR signal — a variant response that
+echoes the resource **owner's** unique data string (email, account ID, UUID) is
+a near-certain bypass. Hand-curating them per identity is the highest-friction
+part of writing a matrix, and on a real target you often don't know every
+identity's unique strings up front.
+
+`--learn-markers` learns them for you. During the owner-baseline phase (the same
+self-replay possession already runs to calibrate each endpoint), it extracts
+high-signal candidate tokens — emails, UUIDs, long digit runs, and
+account-id-shaped alphanumerics — from each identity's baseline responses, then
+keeps only the tokens that are:
+
+- **stable** — present in *every* one of that identity's baseline samples
+  (per-request nonces and timestamps are discarded), and
+- **unique** — present for exactly *one* identity across the whole run (shared
+  API-version strings, CSRF field names, etc. are discarded).
+
+Surviving tokens are merged into that identity's effective marker set for the
+run and feed the existing owner-reflection verdict branch unchanged.
+
+```sh
+possession scan capture.har --matrix matrix.yaml --learn-markers
+# stderr: learned 3 marker(s) from owner baselines: alice+2, bob+1
+```
+
+It is **augment-only and off by default**: operator-supplied `markers` are always
+preserved and never overridden — learning only *adds* markers you didn't list.
+Because the candidate heuristics carry some false-positive risk, the flag is
+opt-in; for fully reproducible/curated runs, supply markers in the matrix instead.
+
 ## Output formats
 
 ### `--report human` (default)

@@ -85,7 +85,17 @@ A finding a hunter can't reproduce is a finding they can't submit. The most-repe
 
 ---
 
-## Item 5 — Automated marker harvesting from owner baselines (Priority: MEDIUM)
+## Item 5 — Automated marker harvesting from owner baselines (Priority: MEDIUM) — ✅ IMPLEMENTED (r9)
+
+Shipped behind `--learn-markers`. The baseline self-replay bodies are grouped
+per owning identity; `detect.HarvestMarkers` extracts candidate tokens (emails,
+UUIDs, long digit runs, account-id-shaped alphanumerics) and promotes only those
+that are **stable across all of an identity's samples** AND **unique to one
+identity across the run**. Learned markers are merged (augment-only — operator
+markers are never dropped) onto the matrix identities, every endpoint
+`OwnerIdentity`, and every variant identity, then feed the existing
+owner-reflection verdict branch unchanged. See `internal/detect/harvest.go` and
+`learnMarkers` in `internal/cli/scan.go`.
 
 ### What
 Today, IDOR detection's strongest signal — `markers` (an identity's unique data strings like email/account-id) — must be hand-entered per identity in the matrix. Add an opt-in pass that *learns* each identity's markers automatically by diffing their owner-baseline response bodies, so the highest-confidence IDOR branch fires without manual curation.
