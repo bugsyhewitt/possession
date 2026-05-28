@@ -47,6 +47,7 @@ var (
 	scanUpdateAllowlist bool   // merge current findings into the allowlist file
 	scanEnumerate       int    // --enumerate N: sequential ID enumeration range (0 = off)
 	scanJWTAttack       bool   // --jwt-attack: forge alg:none + blank-secret tokens (off by default)
+	scanReproCreds      bool   // --repro-creds: emit live credentials in markdown repro blocks (off by default)
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -79,7 +80,7 @@ func init() {
 	scanCmd.Flags().Float64Var(&scanMinConfidence, "min-confidence", 0.0,
 		"omit findings with confidence below this from the findings array (summary still counts them)")
 	scanCmd.Flags().StringVar(&scanReport, "report", "human",
-		"output format: human | json | sarif")
+		"output format: human | json | sarif | markdown (markdown emits PR-ready per-finding HTTP/curl repro blocks)")
 	scanCmd.Flags().BoolVar(&scanExitZero, "exit-zero", false,
 		"exit 0 even when findings are present (useful in CI pipelines that gate elsewhere)")
 	scanCmd.Flags().StringVar(&scanJWTWordlist, "jwt-wordlist", "",
@@ -94,6 +95,8 @@ func init() {
 		"sequential ID enumeration range N: probe captured±N neighbors for numeric path segments (0 = disabled; rate-sensitive, use with --rate)")
 	scanCmd.Flags().BoolVar(&scanJWTAttack, "jwt-attack", false,
 		"forge token-level auth-bypass JWTs for each captured Bearer token: alg:none + blank-secret (off by default; noisier than identity swap)")
+	scanCmd.Flags().BoolVar(&scanReproCreds, "repro-creds", false,
+		"emit live credential values in --report markdown reproduction blocks (off by default; repros redact tokens to <bearer:identity> placeholders so reports are safe to paste publicly)")
 }
 
 func resetScanFlags() {
@@ -117,6 +120,7 @@ func resetScanFlags() {
 	scanUpdateAllowlist = false
 	scanEnumerate = 0
 	scanJWTAttack = false
+	scanReproCreds = false
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -428,7 +432,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 		AttributionWarnings: attributionWarnings,
 	})
 
-	reporter, err := report.New(scanReport)
+	reporter, err := report.NewWithOpts(scanReport, report.ReproOptions{ShowCreds: scanReproCreds})
 	if err != nil {
 		return fmt.Errorf("scan: %w", err)
 	}
