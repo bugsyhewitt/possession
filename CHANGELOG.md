@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Token-level JWT auth-bypass mutator** (`internal/mutate/jwt_auth.go`),
+  gated behind `--jwt-attack` (off by default — noisier than identity swap).
+  Where the existing mutators swap *identities*, this attacks the *token
+  itself*, forging two auth-bypass variants per captured Bearer JWT:
+  (1) **alg:none** — header rewritten to `{"alg":"none","typ":"JWT"}`,
+  signature dropped (`<header>.<payload>.`), finding `POSSESSION-JWT-NONE`;
+  (2) **blank-secret** — claims re-signed with HS256 using an empty-string
+  HMAC key, finding `POSSESSION-JWT-BLANK-SECRET`. Both class `authn-bypass`,
+  severity HIGH (pinned via `detect.SeverityOverrideByMutator`). No external
+  JWT library — tokens are built by base64url decode/re-encode + HMAC. Works
+  on any request whose `Authorization: Bearer`, auth header, auth cookie, or
+  JSON body token field decodes as a 3-part JWT. Tests include a mock HTTP
+  server that validates alg + signature in secure and misconfigured modes.
+
 - **OpenAPI 3.x input parser** (`internal/parse/openapi.go`): accept an
   OpenAPI/Swagger 3.x spec (JSON or YAML) as `scan`/`parse` input, synthesizing
   one `CapturedRequest` per operation so an entire documented API surface can be

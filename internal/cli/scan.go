@@ -46,6 +46,7 @@ var (
 	scanAllowlist       string // path to possession.allowlist suppression file
 	scanUpdateAllowlist bool   // merge current findings into the allowlist file
 	scanEnumerate       int    // --enumerate N: sequential ID enumeration range (0 = off)
+	scanJWTAttack       bool   // --jwt-attack: forge alg:none + blank-secret tokens (off by default)
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -91,6 +92,8 @@ func init() {
 		"merge all findings from this run into --allowlist (creates the file if absent; requires --allowlist)")
 	scanCmd.Flags().IntVar(&scanEnumerate, "enumerate", 0,
 		"sequential ID enumeration range N: probe captured±N neighbors for numeric path segments (0 = disabled; rate-sensitive, use with --rate)")
+	scanCmd.Flags().BoolVar(&scanJWTAttack, "jwt-attack", false,
+		"forge token-level auth-bypass JWTs for each captured Bearer token: alg:none + blank-secret (off by default; noisier than identity swap)")
 }
 
 func resetScanFlags() {
@@ -113,6 +116,7 @@ func resetScanFlags() {
 	scanAllowlist = ""
 	scanUpdateAllowlist = false
 	scanEnumerate = 0
+	scanJWTAttack = false
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -207,7 +211,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// derived from its representative sample's auth components.
 	attributionWarnings := attributeEndpoints(endpoints, matrix)
 
-	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate)
+	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate, scanJWTAttack)
 	if err != nil {
 		return err
 	}
@@ -876,15 +880,20 @@ func buildEvaluator(name string, matrix *model.RoleMatrix) (detect.Evaluator, er
 }
 
 // buildRegistry returns the mutator registry, optionally replacing
-// jwt-hmac-crack's wordlist with the contents of wordlistPath and enabling
-// the EnumerateID mutator when enumerateN > 0.
-func buildRegistry(wordlistPath string, enumerateN int) (*mutate.Registry, error) {
+// jwt-hmac-crack's wordlist with the contents of wordlistPath, enabling
+// the EnumerateID mutator when enumerateN > 0, and enabling the JWTAuth
+// (--jwt-attack) mutator when jwtAttack is true. Both EnumerateID and
+// JWTAuth are always registered but inert in their disabled state, so the
+// canonical DefaultRegistry order (and the order test) stays unchanged.
+func buildRegistry(wordlistPath string, enumerateN int, jwtAttack bool) (*mutate.Registry, error) {
 	enumMutator := mutate.EnumerateID{N: enumerateN}
+	jwtAuthMutator := mutate.JWTAuth{Enabled: jwtAttack}
 
 	if wordlistPath == "" {
-		// Extend the default registry with EnumerateID (no-op when N==0).
+		// Extend the default registry with EnumerateID + JWTAuth (both
+		// no-op in their disabled state).
 		base := mutate.DefaultRegistry()
-		all := append(base.All(), enumMutator)
+		all := append(base.All(), enumMutator, jwtAuthMutator)
 		return mutate.NewRegistry(all...), nil
 	}
 	data, err := os.ReadFile(wordlistPath)
@@ -912,6 +921,7 @@ func buildRegistry(wordlistPath string, enumerateN int) (*mutate.Registry, error
 		mutate.JWTJwksSpoof{},
 		mutate.JWTHmacCrack{Wordlist: words},
 		enumMutator,
+		jwtAuthMutator,
 	), nil
 }
 

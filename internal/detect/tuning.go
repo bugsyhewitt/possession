@@ -186,6 +186,21 @@ var SeverityByClass = map[string]string{
 	"auth-dependency":   "low",
 }
 
+// SeverityOverrideByMutator pins a fixed base severity for specific
+// mutator types, overriding the class-derived SeverityByClass value.
+//
+// The --jwt-attack mutator forges alg:none and blank-secret tokens. These
+// are authn-bypass-class findings, but we deliberately rate them HIGH
+// rather than the class default (critical): the variant proves the
+// verifier *can* be bypassed, but the practical impact depends on what
+// the forged identity can reach — so HIGH keeps them prominent without
+// flooding the critical band that strip-auth occupies. Suspected verdicts
+// still drop one notch via DowngradeSeverity.
+var SeverityOverrideByMutator = map[string]string{
+	"jwt-attack-none":         "high",
+	"jwt-attack-blank-secret": "high",
+}
+
 // DowngradeSeverity maps a `bypass` severity to its `suspected`
 // counterpart (critical→high, high→medium, low→info).
 var DowngradeSeverity = map[string]string{
@@ -217,6 +232,8 @@ func MutatorClass(mutatorType string) string {
 	case "drop-cookie", "strip-token":
 		return "auth-dependency"
 	case "jwt-alg-none", "jwt-sig-strip", "jwt-resign-weak-key":
+		return "authn-bypass"
+	case "jwt-attack-none", "jwt-attack-blank-secret":
 		return "authn-bypass"
 	case "jwt-claim-tamper":
 		return "privesc" // fallback; mutator sets the per-variant class
