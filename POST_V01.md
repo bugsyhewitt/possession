@@ -131,7 +131,22 @@ GraphQL is the fastest-growing IDOR surface in 2026 — every surveyed guide str
 
 ---
 
-## Item 7 — Replay-from-recording mode (`--record` / `--replay`) (Priority: MEDIUM)
+## Item 7 — Replay-from-recording mode (`--record` / `--replay`) (Priority: MEDIUM) — ✅ IMPLEMENTED (r10)
+
+Shipped behind `--record <dir>` and `--replay <dir>`. A live scan with
+`--record` writes every baseline and variant response, keyed by the
+deterministic variant ID, to `<dir>/recording.json` (atomic temp-file + rename,
+versioned schema). `--replay <dir>` skips the entire network phase — engine,
+refresh, flows, rate limiter — and feeds the saved responses straight into the
+detection loop in plan order, so calibration, owner attribution, and finding
+generation run unchanged. Variant IDs are deterministic given the same
+input + matrix, so replay matches index-for-index by ID; any variant absent
+from the recording becomes an inconclusive placeholder (never a false bypass)
+and is surfaced on stderr. `--record`/`--replay` are mutually exclusive, and
+`--replay` rejects `--dry-run`. A base-url mismatch between recording and matrix
+warns loudly. See `internal/record/` and the record/replay branch in
+`internal/cli/scan.go`. Enables offline detection-threshold tuning, evaluator
+A/B testing, and re-scanning a target you only had permission to hit once.
 
 ### What
 Persist every variant request+response from a scan to disk, and add a mode that re-runs detection over a saved recording *without re-hitting the target*. Decouples the (rate-limited, permission-sensitive, slow) network phase from the (fast, iterable) detection phase.

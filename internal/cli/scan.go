@@ -21,6 +21,7 @@ import (
 	"github.com/bugsyhewitt/possession/internal/mutate"
 	"github.com/bugsyhewitt/possession/internal/normalize"
 	"github.com/bugsyhewitt/possession/internal/parse"
+	"github.com/bugsyhewitt/possession/internal/record"
 	"github.com/bugsyhewitt/possession/internal/replay"
 	"github.com/bugsyhewitt/possession/internal/report"
 	"github.com/bugsyhewitt/possession/internal/suppress"
@@ -49,6 +50,8 @@ var (
 	scanJWTAttack       bool   // --jwt-attack: forge alg:none + blank-secret tokens (off by default)
 	scanReproCreds      bool   // --repro-creds: emit live credentials in markdown repro blocks (off by default)
 	scanLearnMarkers    bool   // --learn-markers: harvest per-identity markers from owner baselines (off by default)
+	scanRecord          string // --record <dir>: persist every variant+baseline response to disk (off by default)
+	scanReplay          string // --replay <dir>: re-run detection over a saved recording, firing no requests (off by default)
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -100,6 +103,10 @@ func init() {
 		"emit live credential values in --report markdown reproduction blocks (off by default; repros redact tokens to <bearer:identity> placeholders so reports are safe to paste publicly)")
 	scanCmd.Flags().BoolVar(&scanLearnMarkers, "learn-markers", false,
 		"learn each identity's unique data markers automatically from owner-baseline responses (augments, never overrides, matrix-supplied markers; strengthens the decisive owner-reflection IDOR signal)")
+	scanCmd.Flags().StringVar(&scanRecord, "record", "",
+		"persist every variant+baseline request/response from this scan to <dir>/recording.json so detection can be re-run offline with --replay (decouples the rate-limited network phase from detection tuning)")
+	scanCmd.Flags().StringVar(&scanReplay, "replay", "",
+		"re-run detection over a recording previously written by --record <dir>; fires NO network requests, letting you tune thresholds/evaluators against a target you only had permission to hit once (mutually exclusive with --record)")
 }
 
 func resetScanFlags() {
@@ -125,6 +132,8 @@ func resetScanFlags() {
 	scanJWTAttack = false
 	scanReproCreds = false
 	scanLearnMarkers = false
+	scanRecord = ""
+	scanReplay = ""
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -137,7 +146,24 @@ func runScan(cmd *cobra.Command, args []string) error {
 	if scanUpdateAllowlist && scanAllowlist == "" {
 		return fmt.Errorf("scan: --update-allowlist requires --allowlist <path>")
 	}
+	if scanRecord != "" && scanReplay != "" {
+		return fmt.Errorf("scan: --record and --replay are mutually exclusive")
+	}
+	if scanReplay != "" && scanDryRun {
+		return fmt.Errorf("scan: --replay and --dry-run are mutually exclusive (replay produces findings, dry-run prints the plan)")
+	}
 	input := args[0]
+
+	// Load a saved recording up front when replaying so a bad/missing
+	// recording fails before any other work.
+	var replayRecording *record.Recording
+	if scanReplay != "" {
+		rec, err := record.Load(scanReplay)
+		if err != nil {
+			return fmt.Errorf("scan: %w", err)
+		}
+		replayRecording = rec
+	}
 
 	matrix, err := config.LoadFile(scanMatrix)
 	if err != nil {
@@ -245,17 +271,54 @@ func runScan(cmd *cobra.Command, args []string) error {
 	rs.NoLimit = scanNoLimit
 	rs.Insecure = scanInsecure
 
-	engine := replay.New(rs, "possession/"+buildVersion, stderr)
+	// Collect the deterministic variant IDs for both plans up front. These key
+	// the recording and order replayed responses (POST_V01 Item 7).
+	baselineIDs := variantIDs(baselinePlan)
+	variantIDsList := variantIDs(plan)
 
-	ctx, cancel := context.WithCancel(cmd.Context())
-	defer cancel()
-
+	var baselineResponses, responses []model.Response
 	start := time.Now()
-	engine.PrepareRefresh(ctx, matrix)
-	engine.PrepareFlows(ctx, matrix)
-	baselineResponses := engine.Run(ctx, baselinePlan)
-	responses := engine.Run(ctx, plan)
+	if replayRecording != nil {
+		// --replay: feed saved responses straight into detection. The network
+		// phase (engine, refresh, flows, rate limiting) is skipped entirely.
+		var missingBase, missingVar []string
+		baselineResponses, missingBase = replayRecording.ResponsesFor(baselineIDs, true)
+		responses, missingVar = replayRecording.ResponsesFor(variantIDsList, false)
+		if replayRecording.BaseURL != "" && matrix.Target.BaseURL != "" &&
+			replayRecording.BaseURL != matrix.Target.BaseURL {
+			fmt.Fprintf(stderr,
+				"!!! --replay: recording base_url %q != matrix target %q; detection may be meaningless.\n",
+				replayRecording.BaseURL, matrix.Target.BaseURL)
+		}
+		if n := len(missingBase) + len(missingVar); n > 0 {
+			fmt.Fprintf(stderr,
+				"--replay: %d variant(s) not in recording (treated as inconclusive). "+
+					"Recording was likely made with a different input/matrix.\n", n)
+		}
+	} else {
+		engine := replay.New(rs, "possession/"+buildVersion, stderr)
+		ctx, cancel := context.WithCancel(cmd.Context())
+		defer cancel()
+		engine.PrepareRefresh(ctx, matrix)
+		engine.PrepareFlows(ctx, matrix)
+		baselineResponses = engine.Run(ctx, baselinePlan)
+		responses = engine.Run(ctx, plan)
+	}
 	end := time.Now()
+
+	// --record: persist the network phase so detection can be re-run offline.
+	// Recording happens only on a live run (never under --replay).
+	if scanRecord != "" && replayRecording == nil {
+		rec := record.New("possession/"+buildVersion, matrix.Target.BaseURL,
+			baselineIDs, baselineResponses, variantIDsList, responses)
+		if werr := record.Save(scanRecord, rec); werr != nil {
+			fmt.Fprintf(stderr, "warning: could not write recording to %s: %v\n", scanRecord, werr)
+		} else {
+			nb, nv := rec.Counts()
+			fmt.Fprintf(stderr, "recording written: %s/%s (%d baseline + %d variant responses)\n",
+				scanRecord, record.Filename, nb, nv)
+		}
+	}
 
 	// Group baseline responses by endpoint key.
 	baselineByEndpoint := make(map[string][]*model.Response)
@@ -636,6 +699,16 @@ func buildBaselinePlan(endpoints []*model.Endpoint, samples int) replay.Plan {
 	}
 	plan.TotalBefore = len(plan.Variants)
 	return plan
+}
+
+// variantIDs returns the variant IDs of a plan in plan order. These are the
+// deterministic keys used to record and replay responses (POST_V01 Item 7).
+func variantIDs(plan replay.Plan) []string {
+	ids := make([]string, len(plan.Variants))
+	for i := range plan.Variants {
+		ids[i] = plan.Variants[i].ID
+	}
+	return ids
 }
 
 func endpointKeyOf(ep *model.Endpoint) string {

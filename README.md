@@ -368,6 +368,48 @@ Finding IDs are stable (SHA256 of endpoint key + variant ID + class):
 the same bug produces the same ID on every run against the same target.
 Allowlist entries that no longer match any finding are silently ignored.
 
+## Record &amp; replay (`--record` / `--replay`)
+
+The network phase of a scan is rate-limited, permission-sensitive, and slow;
+detection tuning is fast and iterative. `--record` decouples the two by saving
+every baseline and variant response to disk, and `--replay` re-runs detection
+over that recording **without firing a single request**.
+
+```bash
+# Capture once: scan the live target and persist every response.
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --record runs/2026-05-28
+
+# Iterate offline: re-run detection against the saved recording. No network.
+# Tweak --min-confidence, --evaluator, markers, etc. and re-run freely.
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --replay runs/2026-05-28 \
+    --min-confidence 0.7
+```
+
+The recording is a single versioned `recording.json` written into the directory
+(atomically, so a crash never leaves a half-written file). Responses are keyed
+by their deterministic variant ID, so a replay regenerates the scan plan from
+the same input + matrix and matches saved responses index-for-index — endpoint
+attribution, calibration, and finding generation are byte-for-byte identical to
+the live run.
+
+| Flag             | Behaviour                                                                       |
+|------------------|---------------------------------------------------------------------------------|
+| `--record <dir>` | Persist every baseline + variant response to `<dir>/recording.json`             |
+| `--replay <dir>` | Re-run detection over a saved recording; fire NO network requests               |
+
+`--record` and `--replay` are mutually exclusive, and `--replay` cannot combine
+with `--dry-run`. A variant present in this run but absent from the recording
+(because the recording was made with a different input/matrix) is treated as
+inconclusive — never a false bypass — and reported on stderr. A base-url
+mismatch between the recording and the matrix target warns loudly.
+
+This enables: tuning detection thresholds offline, A/B-testing evaluator
+changes, and re-scanning a target you only have permission to hit once.
+
 ## What ships in v1.0
 
 - 9 mutators total: 5 classic (`strip-auth`, `swap-identity`,
