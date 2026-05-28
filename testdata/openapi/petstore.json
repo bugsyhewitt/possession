@@ -1,0 +1,53 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "Petstore", "version": "1.0.0" },
+  "servers": [
+    { "url": "https://api.example.com/{basePath}", "variables": { "basePath": { "default": "v1" } } }
+  ],
+  "paths": {
+    "/users": {
+      "get": {
+        "summary": "List users",
+        "parameters": [
+          { "name": "limit", "in": "query", "required": true, "schema": { "type": "integer", "example": 25 } },
+          { "name": "X-Trace", "in": "header", "required": true, "schema": { "type": "string" } }
+        ]
+      },
+      "post": {
+        "summary": "Create user",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/User" }
+            }
+          }
+        }
+      }
+    },
+    "/users/{userId}/orders/{orderId}": {
+      "parameters": [
+        { "name": "userId", "in": "path", "required": true, "schema": { "type": "integer", "example": 1001 } }
+      ],
+      "get": {
+        "summary": "Get an order",
+        "parameters": [
+          { "name": "orderId", "in": "path", "required": true, "schema": { "type": "string", "example": "ord-7" } }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "User": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "example": "alice" },
+          "email": { "type": "string", "format": "email" },
+          "age": { "type": "integer" },
+          "active": { "type": "boolean", "default": true }
+        }
+      }
+    }
+  }
+}

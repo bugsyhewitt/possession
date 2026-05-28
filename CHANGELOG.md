@@ -5,6 +5,21 @@ All notable changes to possession will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **OpenAPI 3.x input parser** (`internal/parse/openapi.go`): accept an
+  OpenAPI/Swagger 3.x spec (JSON or YAML) as `scan`/`parse` input, synthesizing
+  one `CapturedRequest` per operation so an entire documented API surface can be
+  tested without a HAR. Path/query/header params are filled from
+  `example`/`examples`/`schema`/`default`/`enum` values (id-shaped path params
+  fall back to `1`); minimal JSON bodies are synthesized from the `requestBody`
+  schema with local `$ref` and shallow `allOf` resolution. Wired into
+  `detectFormat` (`--format openapi`, plus `.yaml`/`.yml` extension and
+  `openapi`/`swagger` content-key auto-detection that disambiguates OpenAPI JSON
+  from HAR JSON). Synthesized endpoints feed every existing mutator unchanged.
+
 ## [1.1.0] — 2026-05-18
 
 Four packets shipped in the v1.1 autonomous run. Plus one integration

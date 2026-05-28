@@ -64,7 +64,7 @@ var scanCmd = &cobra.Command{
 
 func init() {
 	scanCmd.Flags().StringVar(&scanMatrix, "matrix", "", "role-matrix YAML (required)")
-	scanCmd.Flags().StringVar(&scanFormat, "format", "auto", "input format: har | curl | auto")
+	scanCmd.Flags().StringVar(&scanFormat, "format", "auto", "input format: har | curl | openapi | auto")
 	scanCmd.Flags().Float64Var(&scanRate, "rate", 0, "per-host requests per second (default from matrix or 10)")
 	scanCmd.Flags().IntVar(&scanConcurrency, "concurrency", 0, "max in-flight requests (default from matrix or 5)")
 	scanCmd.Flags().IntVar(&scanMaxVariants, "max-variants", 0, "cap on total variants generated (default 10000)")
@@ -192,6 +192,8 @@ func runScan(cmd *cobra.Command, args []string) error {
 		if req != nil {
 			requests = []*model.CapturedRequest{req}
 		}
+	case "openapi":
+		requests, err = parse.OpenAPI(f)
 	}
 	if err != nil {
 		return err

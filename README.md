@@ -21,7 +21,7 @@ you can invoke from a Makefile, a pipeline, or a Pho3nix-style harness.
 Pipeline:
 
 ```
-HAR/curl + role-matrix YAML
+HAR/curl/OpenAPI + role-matrix YAML
     → parse + normalize + scope filter
     → variant generation (identity-swap, object-swap, JWT, … × N identities)
     → replay engine (rate-limited, refresh-aware)
@@ -87,6 +87,47 @@ possession scan examples/ecommerce/capture.har \
 
 See [`examples/ecommerce/README.md`](examples/ecommerce/README.md) for
 a full walkthrough.
+
+## Input formats
+
+`scan` and `parse` accept three capture formats, auto-detected by extension
+and content (override with `--format har|curl|openapi`):
+
+| Format    | Detected by                              | Produces                          |
+|-----------|------------------------------------------|-----------------------------------|
+| `har`     | `.har`, or JSON without an `openapi` key | one request per surviving entry   |
+| `curl`    | leading `curl`                           | one request                       |
+| `openapi` | `.yaml`/`.yml`, or JSON with an `openapi`/`swagger` key | one request per operation |
+
+### OpenAPI 3.x
+
+Point possession at a published OpenAPI 3.x spec (JSON or YAML) to test an
+entire documented API surface without capturing every call by hand:
+
+```bash
+possession scan api/openapi.yaml \
+    --matrix matrix.yaml \
+    --dry-run
+```
+
+For each operation (`method` + `path`) possession synthesizes a replayable
+request:
+
+- the first `servers[]` URL (with variable defaults substituted) is the base;
+  specs without a `servers` block yield relative paths;
+- `{param}` path segments are filled from the parameter's
+  `example`/`examples`/`schema.example`/`default`/`enum` value, falling back to
+  `1` for id-shaped names so the URL stays replayable and normalizes back to
+  `{id}`;
+- required query and header parameters are added with their example values;
+- a minimal JSON request body is synthesized from the `requestBody` schema's
+  example, or from `properties` (local `$ref` and shallow `allOf` are
+  resolved).
+
+This is a pragmatic subset — external `$ref`s and full `oneOf`/`anyOf`
+composition are not evaluated — but it covers the paths + required params +
+example bodies that most real specs carry. Synthesized endpoints feed every
+mutator, including `swap-object`, exactly like HAR/curl captures.
 
 ## Role matrix
 
@@ -215,7 +256,7 @@ Allowlist entries that no longer match any finding are silently ignored.
   `downgrade-role`, `drop-cookie`, `strip-token`) + 4 JWT
   (`jwt-alg-none`, `jwt-sig-strip`, `jwt-claim-tamper`,
   `jwt-resign-weak-key`).
-- HAR + curl input.
+- HAR + curl + OpenAPI 3.x input.
 - Per-host token-bucket rate limiter, bounded concurrency, adaptive
   429/503 backoff, Tier-1 dynamic refresh hooks.
 - Calibrated N-sample baseline, 10-branch verdict ladder, ASVS V8
@@ -234,7 +275,7 @@ Deliberately deferred to keep v1.0 scope bounded. See
 - Declarative AuthMatrix-style evaluator (the interface seam is in
   place).
 - Stateful login flows (CSRF chains, multi-step OAuth).
-- Postman / OpenAPI / mitmproxy input formats.
+- Postman / mitmproxy input formats.
 - HTML and Markdown reporters.
 - ASVS V9 (Self-Contained Tokens) control mapping — currently
   omitted (Gate F: not inventing control IDs we can't verify).

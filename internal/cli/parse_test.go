@@ -73,6 +73,63 @@ func TestParseCommandCurlFormat(t *testing.T) {
 	}
 }
 
+func TestParseCommandOpenAPIExplicit(t *testing.T) {
+	out, err := runCmd(t, "parse", "../../testdata/openapi/petstore.json", "--format", "openapi")
+	if err != nil {
+		t.Fatalf("parse: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "/v1/users") {
+		t.Errorf("expected synthesized OpenAPI endpoint in output:\n%s", out)
+	}
+	// The numeric path param should template back to {id}.
+	if !strings.Contains(out, "/orders/") {
+		t.Errorf("expected orders endpoint in output:\n%s", out)
+	}
+}
+
+func TestParseCommandOpenAPIAutoDetectJSON(t *testing.T) {
+	// petstore.json starts with '{' like a HAR — auto-detect must use the
+	// "openapi" key to disambiguate.
+	out, err := runCmd(t, "parse", "../../testdata/openapi/petstore.json")
+	if err != nil {
+		t.Fatalf("parse auto: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "/v1/users") {
+		t.Errorf("auto-detect failed to route JSON spec to openapi:\n%s", out)
+	}
+}
+
+func TestParseCommandOpenAPIAutoDetectYAML(t *testing.T) {
+	out, err := runCmd(t, "parse", "../../testdata/openapi/minimal.yaml")
+	if err != nil {
+		t.Fatalf("parse auto yaml: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "/health") {
+		t.Errorf("auto-detect failed for YAML spec:\n%s", out)
+	}
+}
+
+func TestDetectFormatOpenAPI(t *testing.T) {
+	cases := []struct {
+		path, requested, want string
+	}{
+		{"../../testdata/openapi/petstore.json", "auto", "openapi"},
+		{"../../testdata/openapi/minimal.yaml", "auto", "openapi"},
+		{"../../testdata/har/ecommerce.har", "auto", "har"},
+		{"x", "openapi", "openapi"},
+	}
+	for _, c := range cases {
+		got, err := detectFormat(c.path, c.requested)
+		if err != nil {
+			t.Errorf("detectFormat(%q,%q): %v", c.path, c.requested, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("detectFormat(%q,%q) = %q, want %q", c.path, c.requested, got, c.want)
+		}
+	}
+}
+
 func TestScanStubFails(t *testing.T) {
 	_, err := runCmd(t, "scan")
 	if err == nil {
