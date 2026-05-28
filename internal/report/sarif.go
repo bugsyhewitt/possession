@@ -122,8 +122,8 @@ func (SARIFReporter) Render(run *model.RunResult, w io.Writer) error {
 
 	for _, f := range findings {
 		level := severityToLevel(f.Severity)
-		msgText := fmt.Sprintf("%s on %s — verdict=%s, mutation=%s, confidence=%.2f",
-			f.Class, f.EndpointKey, f.Verdict, f.Mutation, f.Confidence)
+		msgText := fmt.Sprintf("%s on %s — verdict=%s, mutation=%s, confidence=%.2f (%s)",
+			f.Class, f.EndpointKey, f.Verdict, f.Mutation, f.Confidence, bandOrDash(f.ConfidenceBand))
 
 		method, pathTmpl := splitEndpointKey(f.EndpointKey)
 		uri := pathTmpl
@@ -134,6 +134,7 @@ func (SARIFReporter) Render(run *model.RunResult, w io.Writer) error {
 		// Property bag with possession-specific fields.
 		pb := sarif.NewPropertyBag()
 		pb.Add("confidence", f.Confidence)
+		pb.Add("confidence_band", bandOrDash(f.ConfidenceBand))
 		pb.Add("verdict", f.Verdict)
 		pb.Add("similarity", f.Evidence.SimilarityScore)
 		pb.Add("mutation", f.Mutation)
@@ -188,6 +189,15 @@ func asvsForClass(class string) []string {
 	default:
 		return nil
 	}
+}
+
+// bandOrDash renders a confidence band, substituting a dash when unset so
+// SARIF property values are never the empty string.
+func bandOrDash(band string) string {
+	if band == "" {
+		return "-"
+	}
+	return band
 }
 
 func severityRank(sev string) int {

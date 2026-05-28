@@ -4,9 +4,23 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/bugsyhewitt/possession/internal/model"
 )
+
+// notesContainOwnerReflection reports whether any verdict note records the
+// decisive owner-marker reflection signal (evaluator branch 7). Used by
+// the BOLA confidence band to exempt marker-reflection bypasses from the
+// bulk-similarity gate.
+func notesContainOwnerReflection(notes []string) bool {
+	for _, n := range notes {
+		if strings.Contains(n, "reflectedOwner") {
+			return true
+		}
+	}
+	return false
+}
 
 // BuildFinding constructs a model.Finding for one variant that produced
 // a bypass or suspected verdict. Class is derived from the variant's
@@ -78,19 +92,28 @@ func BuildFinding(ep *model.Endpoint, v *model.Variant, r *model.Response, vv Va
 
 	notes := append([]string(nil), vv.Notes...)
 
+	// BOLA confidence band (POST_V01 Item 5). The decisive owner-marker
+	// reflection is recorded as a typed verdict note by the evaluator
+	// (branch 7); use it to exempt marker-reflection bypasses from the
+	// bulk-similarity gate, since the owner's unique data is literally
+	// present even when the surrounding body differs.
+	markerReflected := notesContainOwnerReflection(vv.Notes)
+	band := ClassifyConfidenceBand(vv.Confidence, sim, markerReflected)
+
 	return model.Finding{
-		ID:          id,
-		Endpoint:    ep,
-		Variant:     v,
-		Class:       class,
-		Verdict:     vv.Verdict,
-		Confidence:  vv.Confidence,
-		Severity:    severity,
-		ASVS:        asvs,
-		EndpointKey: epKey,
-		VariantID:   variantID(v),
-		Mutation:    mut,
-		Identity:    ident,
+		ID:             id,
+		Endpoint:       ep,
+		Variant:        v,
+		Class:          class,
+		Verdict:        vv.Verdict,
+		Confidence:     vv.Confidence,
+		ConfidenceBand: band,
+		Severity:       severity,
+		ASVS:           asvs,
+		EndpointKey:    epKey,
+		VariantID:      variantID(v),
+		Mutation:       mut,
+		Identity:       ident,
 		Evidence: model.Evidence{
 			BaselineStatus:  baselineStatus,
 			VariantStatus:   variantStatus,

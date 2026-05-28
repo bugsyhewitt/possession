@@ -41,7 +41,7 @@ func mkRun() *model.RunResult {
 		Findings: []model.Finding{
 			{
 				ID: "deadbeef00000001", Class: "idor", Verdict: "bypass",
-				Confidence: 0.92, Severity: "high",
+				Confidence: 0.92, ConfidenceBand: "high", Severity: "high",
 				ASVS: []string{"v5.0.0-8.2.2"},
 				EndpointKey: "GET api.example.com/users/{id}",
 				VariantID:   "v-idor-1", Mutation: "swap-identity",
@@ -54,7 +54,7 @@ func mkRun() *model.RunResult {
 			},
 			{
 				ID: "deadbeef00000002", Class: "authn-bypass", Verdict: "bypass",
-				Confidence: 0.95, Severity: "critical",
+				Confidence: 0.95, ConfidenceBand: "high", Severity: "critical",
 				ASVS: []string{"v5.0.0-8.3.1"},
 				EndpointKey: "GET api.example.com/profile",
 				VariantID:   "v-anon-1", Mutation: "strip-auth",
@@ -132,6 +132,66 @@ func TestHuman_RenderSmoke(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("human output missing %q\n---\n%s", want, out)
 		}
+	}
+}
+
+// TestHuman_ConfidenceBandColumn verifies the human table exposes the BOLA
+// confidence band as its own column and renders the per-finding label.
+func TestHuman_ConfidenceBandColumn(t *testing.T) {
+	var buf bytes.Buffer
+	if err := (HumanReporter{}).Render(mkRun(), &buf); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "BAND") {
+		t.Errorf("human findings table missing BAND column header\n---\n%s", out)
+	}
+	if !strings.Contains(out, "high") {
+		t.Errorf("human findings table missing high band label\n---\n%s", out)
+	}
+}
+
+// TestHuman_BandUnsetRendersDash verifies a finding with no band set shows a
+// dash rather than a blank column (keeps the table aligned).
+func TestHuman_BandUnsetRendersDash(t *testing.T) {
+	run := &model.RunResult{
+		Run: model.RunMeta{BaseURL: "https://x"},
+		Findings: []model.Finding{
+			{ID: "deadbeef00000003", Class: "idor", Verdict: "bypass",
+				Confidence: 0.9, Severity: "high",
+				EndpointKey: "GET x/y", Mutation: "swap-identity"},
+		},
+		Summary: model.RunSummary{Verdicts: map[string]int{"bypass": 1}, TotalFindings: 1},
+	}
+	var buf bytes.Buffer
+	if err := (HumanReporter{}).Render(run, &buf); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if bandLabel("") != "-" {
+		t.Errorf("bandLabel(\"\") = %q, want -", bandLabel(""))
+	}
+}
+
+// TestJSON_IncludesConfidenceBand verifies the band field serializes.
+func TestJSON_IncludesConfidenceBand(t *testing.T) {
+	var buf bytes.Buffer
+	if err := (JSONReporter{}).Render(mkRun(), &buf); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(buf.String(), `"confidence_band": "high"`) {
+		t.Errorf("JSON output missing confidence_band field\n---\n%s", buf.String())
+	}
+}
+
+// TestSARIF_IncludesConfidenceBand verifies the band reaches the SARIF
+// property bag.
+func TestSARIF_IncludesConfidenceBand(t *testing.T) {
+	var buf bytes.Buffer
+	if err := (SARIFReporter{}).Render(mkRun(), &buf); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(buf.String(), "confidence_band") {
+		t.Errorf("SARIF output missing confidence_band property\n---\n%s", buf.String())
 	}
 }
 

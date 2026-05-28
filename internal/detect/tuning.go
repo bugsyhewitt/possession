@@ -82,6 +82,88 @@ const (
 	LowConfidence = 0.05
 )
 
+// ─── BOLA confidence band (POST_V01 Item 5) ───────────────────────────
+//
+// A finding's numeric Confidence answers "how likely is this a real
+// bypass?". The categorical confidence band answers the operator-facing
+// question "is this a true BOLA, or a 2xx error wrapper?". The band is
+// derived from BOTH the numeric confidence AND the response-body
+// similarity to the owner baseline — because the single most common
+// false-positive shape is an API that returns 200 OK with an error body
+// (`{"error":"forbidden"}`) instead of a 403. Such a response can pick up
+// a moderate numeric confidence from the verdict ladder, but its body is
+// NOT near-identical to the owner's real resource, so its similarity stays
+// low. The band caps those down to `low` regardless of numeric confidence,
+// keeping the high band reserved for findings whose body genuinely
+// resembles the owner's data (true BOLA).
+
+const (
+	// Confidence band labels surfaced to operators.
+	BandHigh   = "high"
+	BandMedium = "medium"
+	BandLow    = "low"
+
+	// BandHighSimFloor is the body-similarity floor a finding must clear to
+	// be eligible for the `high` band. A 2xx response whose body diverges
+	// this much from the owner baseline is treated as a probable error
+	// wrapper / different resource and is never promoted to high — even at a
+	// high numeric confidence. Marker-reflection bypasses (which carry a
+	// decisive owner-marker signal but may have a divergent surrounding
+	// body) are exempt; see ClassifyConfidenceBand.
+	BandHighSimFloor = 0.85
+
+	// BandMediumSimFloor is the body-similarity floor for the `medium`
+	// band. A body that resembles the owner's resource at least this much
+	// (partial match) is a plausible bypass worth medium attention. Below
+	// this floor the body is treated as a probable 2xx error wrapper /
+	// different resource and the finding is capped at `low` regardless of
+	// numeric confidence.
+	BandMediumSimFloor = 0.50
+
+	// BandHighConfFloor / BandMediumConfFloor are the numeric-confidence
+	// cut points between bands once the similarity gate is satisfied.
+	BandHighConfFloor   = 0.80
+	BandMediumConfFloor = 0.50
+)
+
+// ClassifyConfidenceBand maps a finding's numeric confidence and body
+// similarity into a categorical BOLA confidence band.
+//
+//	high   — numeric confidence ≥ BandHighConfFloor AND the response body
+//	         is near-identical to the owner baseline (similarity ≥
+//	         BandHighSimFloor), i.e. the server returned the owner's actual
+//	         resource: a true BOLA. A decisive owner-marker reflection
+//	         (markerReflected=true) also qualifies regardless of bulk
+//	         similarity, because the owner's unique data is literally
+//	         present in the body.
+//	medium — numeric confidence ≥ BandMediumConfFloor and the body at least
+//	         partially resembles the owner's resource (similarity ≥
+//	         BandMediumSimFloor), but the high gate was not met (e.g.
+//	         suspected verdict, or high confidence with a body that only
+//	         partially matches the owner's).
+//	low    — everything else, including any 2xx finding whose body diverges
+//	         from the owner baseline (similarity < BandMediumSimFloor)
+//	         despite a non-trivial numeric confidence — the classic
+//	         200-with-error-body wrapper.
+//
+// A decisive owner-marker reflection (markerReflected=true) clears both
+// similarity floors, since the owner's unique data is literally present in
+// the body even when the surrounding bulk content differs.
+func ClassifyConfidenceBand(confidence, similarity float64, markerReflected bool) string {
+	highBodyMatch := similarity >= BandHighSimFloor || markerReflected
+	mediumBodyMatch := similarity >= BandMediumSimFloor || markerReflected
+	switch {
+	case confidence >= BandHighConfFloor && highBodyMatch:
+		return BandHigh
+	case confidence >= BandMediumConfFloor && mediumBodyMatch:
+		return BandMedium
+	default:
+		// Either low numeric confidence, or a body that diverges from the
+		// owner's resource (likely a 2xx error wrapper). Cap at low.
+		return BandLow
+	}
+}
+
 // ─── similarity (§4.3) ────────────────────────────────────────────────
 
 const (
@@ -119,11 +201,11 @@ var VolatileJSONKeys = []string{
 // from text/HTML bodies so similarity scoring isn't fooled by per-request
 // timestamps, csrf tokens, etc.
 var (
-	HTMLCSRFInput = regexp.MustCompile(`(?i)<input[^>]+name=["']?(csrf|_token|authenticity_token|xsrf)[^>]*>`)
-	HTMLCSRFMeta  = regexp.MustCompile(`(?i)<meta[^>]+name=["']?(csrf-token|csrf|xsrf)[^>]*>`)
-	HTMLISO8601   = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b`)
-	HTMLLongHex   = regexp.MustCompile(`\b[0-9a-fA-F]{16,}\b`)
-	HTMLUUID      = regexp.MustCompile(`\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
+	HTMLCSRFInput  = regexp.MustCompile(`(?i)<input[^>]+name=["']?(csrf|_token|authenticity_token|xsrf)[^>]*>`)
+	HTMLCSRFMeta   = regexp.MustCompile(`(?i)<meta[^>]+name=["']?(csrf-token|csrf|xsrf)[^>]*>`)
+	HTMLISO8601    = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b`)
+	HTMLLongHex    = regexp.MustCompile(`\b[0-9a-fA-F]{16,}\b`)
+	HTMLUUID       = regexp.MustCompile(`\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
 	HTMLWhitespace = regexp.MustCompile(`\s+`)
 )
 
@@ -169,11 +251,11 @@ var LoginRedirectHints = []string{
 // ASVSByClass maps a finding Class to its ASVS v5.0.0 control IDs.
 // Used by detect/finding.go. Fixed mapping per §5.3 of the Packet-3 brief.
 var ASVSByClass = map[string][]string{
-	"authn-bypass":       {"v5.0.0-8.3.1"},
-	"idor":               {"v5.0.0-8.2.2"},
-	"idor-cross-tenant":  {"v5.0.0-8.4.1", "v5.0.0-8.2.2"},
-	"privesc":            {"v5.0.0-8.2.1"},
-	"auth-dependency":    {"v5.0.0-8.3.1"},
+	"authn-bypass":      {"v5.0.0-8.3.1"},
+	"idor":              {"v5.0.0-8.2.2"},
+	"idor-cross-tenant": {"v5.0.0-8.4.1", "v5.0.0-8.2.2"},
+	"privesc":           {"v5.0.0-8.2.1"},
+	"auth-dependency":   {"v5.0.0-8.3.1"},
 }
 
 // SeverityByClass is the BASE severity for `bypass` verdicts. `suspected`
