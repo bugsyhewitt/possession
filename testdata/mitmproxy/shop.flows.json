@@ -1,0 +1,112 @@
+[
+  {
+    "type": "http",
+    "client_conn": {"address": ["127.0.0.1", 51234]},
+    "server_conn": {"address": ["api.shop.example.com", 443]},
+    "marked": "",
+    "request": {
+      "method": "GET",
+      "scheme": "https",
+      "host": "api.shop.example.com",
+      "port": 443,
+      "path": "/api/users/8821/profile?expand=true",
+      "headers": [
+        ["Host", "api.shop.example.com"],
+        ["Cookie", "session=alice"],
+        ["Accept", "application/json"]
+      ],
+      "content": ""
+    }
+  },
+  {
+    "type": "http",
+    "server_conn": {"address": ["api.shop.example.com", 443]},
+    "request": {
+      "method": "GET",
+      "scheme": "https",
+      "host": "api.shop.example.com",
+      "port": 443,
+      "path": "/api/orders/9001",
+      "headers": [
+        ["Authorization", "Bearer tok_alice"]
+      ],
+      "content": ""
+    }
+  },
+  {
+    "type": "http",
+    "server_conn": {"address": ["api.shop.example.com", 443]},
+    "request": {
+      "method": "POST",
+      "scheme": "https",
+      "host": "api.shop.example.com",
+      "port": 443,
+      "path": "/api/cart/items",
+      "headers": [
+        ["Content-Type", "application/json"]
+      ],
+      "content": "{\"sku\":\"x\"}"
+    }
+  },
+  {
+    "type": "http",
+    "server_conn": {"address": ["admin.shop.example.com", 8443]},
+    "request": {
+      "method": "GET",
+      "scheme": "https",
+      "host": "admin.shop.example.com",
+      "port": 8443,
+      "path": "/api/reports/sales",
+      "headers": [
+        {"name": "X-Admin", "value": "1"}
+      ],
+      "content": ""
+    }
+  },
+  {
+    "type": "http",
+    "server_conn": {"address": ["cdn.shop.example.com", 443]},
+    "request": {
+      "method": "GET",
+      "scheme": "https",
+      "host": "cdn.shop.example.com",
+      "port": 443,
+      "path": "/static/app.js",
+      "headers": [],
+      "content": ""
+    }
+  },
+  {
+    "type": "http",
+    "server_conn": {"address": ["api.shop.example.com", 443]},
+    "request": {
+      "method": "GET",
+      "scheme": "https",
+      "host": "api.shop.example.com",
+      "port": 443,
+      "path": "/api/styles/main",
+      "headers": [
+        ["Content-Type", "text/css; charset=utf-8"]
+      ],
+      "content": ""
+    }
+  },
+  {
+    "type": "http",
+    "server_conn": {"address": ["www.google-analytics.com", 443]},
+    "request": {
+      "method": "POST",
+      "scheme": "https",
+      "host": "www.google-analytics.com",
+      "port": 443,
+      "path": "/collect",
+      "headers": [],
+      "content": "tid=UA-1"
+    }
+  },
+  {
+    "type": "tcp",
+    "server_conn": {"address": ["api.shop.example.com", 443]},
+    "messages": [["client", "binary-blob"]]
+  }
+]

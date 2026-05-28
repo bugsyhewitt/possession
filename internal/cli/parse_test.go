@@ -134,6 +134,44 @@ func TestParseCommandPostmanAutoDetect(t *testing.T) {
 	}
 }
 
+func TestParseCommandMitmproxyExplicit(t *testing.T) {
+	out, err := runCmd(t, "parse", "../../testdata/mitmproxy/shop.flows.json", "--format", "mitmproxy")
+	if err != nil {
+		t.Fatalf("parse: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "/api/users/{id}/profile") {
+		t.Errorf("expected templated mitmproxy endpoint in output:\n%s", out)
+	}
+	if !strings.Contains(out, "/api/cart/items") {
+		t.Errorf("expected POST cart endpoint in output:\n%s", out)
+	}
+	// Static asset, css, and analytics host must be filtered out.
+	if strings.Contains(out, "app.js") || strings.Contains(out, "google-analytics") || strings.Contains(out, "/api/styles/main") {
+		t.Errorf("filtered traffic leaked into output:\n%s", out)
+	}
+}
+
+func TestParseCommandMitmproxyAutoDetectArray(t *testing.T) {
+	// A JSON array is the unambiguous mitmproxy dump shape.
+	out, err := runCmd(t, "parse", "../../testdata/mitmproxy/shop.flows.json")
+	if err != nil {
+		t.Fatalf("parse auto: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "/api/users/{id}/profile") {
+		t.Errorf("auto-detect failed to route JSON array to mitmproxy:\n%s", out)
+	}
+}
+
+func TestParseCommandMitmproxyAutoDetectJSONL(t *testing.T) {
+	out, err := runCmd(t, "parse", "../../testdata/mitmproxy/stream.flows.jsonl")
+	if err != nil {
+		t.Fatalf("parse auto jsonl: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "/v1/accounts/{id}") {
+		t.Errorf("auto-detect failed for JSON-lines mitmproxy dump:\n%s", out)
+	}
+}
+
 func TestDetectFormatOpenAPI(t *testing.T) {
 	cases := []struct {
 		path, requested, want string
@@ -142,8 +180,11 @@ func TestDetectFormatOpenAPI(t *testing.T) {
 		{"../../testdata/openapi/minimal.yaml", "auto", "openapi"},
 		{"../../testdata/har/ecommerce.har", "auto", "har"},
 		{"../../testdata/postman/shop.postman_collection.json", "auto", "postman"},
+		{"../../testdata/mitmproxy/shop.flows.json", "auto", "mitmproxy"},
+		{"../../testdata/mitmproxy/stream.flows.jsonl", "auto", "mitmproxy"},
 		{"x", "openapi", "openapi"},
 		{"x", "postman", "postman"},
+		{"x", "mitmproxy", "mitmproxy"},
 	}
 	for _, c := range cases {
 		got, err := detectFormat(c.path, c.requested)

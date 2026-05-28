@@ -21,7 +21,7 @@ you can invoke from a Makefile, a pipeline, or a Pho3nix-style harness.
 Pipeline:
 
 ```
-HAR/curl/OpenAPI/Postman + role-matrix YAML
+HAR/curl/OpenAPI/Postman/mitmproxy + role-matrix YAML
     → parse + normalize + scope filter
     → variant generation (identity-swap, object-swap, JWT, … × N identities)
     → replay engine (rate-limited, refresh-aware)
@@ -94,8 +94,8 @@ a full walkthrough.
 
 ## Input formats
 
-`scan` and `parse` accept four capture formats, auto-detected by extension
-and content (override with `--format har|curl|openapi|postman`):
+`scan` and `parse` accept five capture formats, auto-detected by extension
+and content (override with `--format har|curl|openapi|postman|mitmproxy`):
 
 | Format    | Detected by                              | Produces                          |
 |-----------|------------------------------------------|-----------------------------------|
@@ -103,6 +103,7 @@ and content (override with `--format har|curl|openapi|postman`):
 | `curl`    | leading `curl`                           | one request                       |
 | `openapi` | `.yaml`/`.yml`, or JSON with an `openapi`/`swagger` key | one request per operation |
 | `postman` | JSON with a `collection/v2` schema marker, `_postman_id`, or `info`+`item` | one request per request item |
+| `mitmproxy` | `.jsonl`/`.ndjson`, a top-level JSON array, or a JSON flow object (`request` + `scheme`/`server_conn`, no `log`) | one request per HTTP flow |
 
 ### OpenAPI 3.x
 
@@ -161,6 +162,44 @@ replayable request:
 
 Synthesized endpoints feed every mutator exactly like HAR/curl/OpenAPI
 captures. Postman v1 collections are rejected with a hint to re-export as v2.1.
+
+### mitmproxy
+
+Point possession at a [mitmproxy](https://mitmproxy.org) JSON flow dump to
+test traffic you captured with `mitmproxy`/`mitmdump` without re-exporting it
+as a HAR. Two text serializations are accepted:
+
+- a **JSON array** of flow objects — the shape the
+  [`jsondump`](https://docs.mitmproxy.org/stable/addons-examples/#jsondump)
+  addon writes when flows are collected into a list;
+- **JSON Lines** (one flow object per line, `.jsonl`/`.ndjson`) — the streaming
+  shape `mitmdump` json addons emit.
+
+```bash
+mitmdump -r capture.flows -s jsondump.py   # produce flows.jsonl
+possession scan flows.jsonl \
+    --matrix matrix.yaml \
+    --dry-run
+```
+
+For each HTTP flow possession reconstructs a replayable request:
+
+- the URL is rebuilt from the request's `scheme` + `host` + `port` + `path`
+  (default ports `80`/`443` are elided; a non-default port is preserved); a
+  flow that carries only an absolute-form `path` is parsed directly;
+- headers are read from the `headers` list in either mitmproxy serialization —
+  `["Name","Value"]` pairs or `{"name","value"}` objects; the `Cookie` header
+  is split into individual cookies;
+- the body is taken from the request's `content` (or `text`) field verbatim.
+
+The same hygiene as the HAR parser applies — static assets (`.js`/`.css`/
+images/fonts), `text/css`/`application/javascript` content types, and
+well-known analytics hosts are dropped, so a mitmproxy dump and the equivalent
+HAR dedup to the same endpoints. Non-HTTP flows (tcp/websocket/dns) are
+skipped, and one malformed flow or JSON-Lines line is skipped without failing
+the parse. mitmproxy's native binary `.flow`/`.mitm` files are **not** read
+directly — export them as JSON (above) or as a HAR. Synthesized endpoints feed
+every mutator exactly like HAR/curl captures.
 
 ## Token-level JWT attacks (`--jwt-attack`)
 
@@ -470,7 +509,7 @@ changes, and re-scanning a target you only have permission to hit once.
   `downgrade-role`, `drop-cookie`, `strip-token`) + 4 JWT
   (`jwt-alg-none`, `jwt-sig-strip`, `jwt-claim-tamper`,
   `jwt-resign-weak-key`).
-- HAR + curl + OpenAPI 3.x + Postman v2 input.
+- HAR + curl + OpenAPI 3.x + Postman v2 + mitmproxy JSON input.
 - Per-host token-bucket rate limiter, bounded concurrency, adaptive
   429/503 backoff, Tier-1 dynamic refresh hooks.
 - Calibrated N-sample baseline, 10-branch verdict ladder, ASVS V8
@@ -491,7 +530,6 @@ Deliberately deferred to keep v1.0 scope bounded. See
 - Declarative AuthMatrix-style evaluator (the interface seam is in
   place).
 - Stateful login flows (CSRF chains, multi-step OAuth).
-- mitmproxy input format (Postman v2 shipped post-v0.1).
 - HTML reporter (the Markdown reporter shipped post-v0.1).
 - ASVS V9 (Self-Contained Tokens) control mapping — currently
   omitted (Gate F: not inventing control IDs we can't verify).

@@ -1,0 +1,5 @@
+{"type":"http","server_conn":{"address":["api.dev.example.com",80]},"request":{"method":"GET","scheme":"http","host":"api.dev.example.com","port":80,"path":"/v1/accounts/1001","headers":[["Authorization","Bearer tok_bob"]],"content":""}}
+
+{"type":"http","server_conn":{"address":["api.dev.example.com",443]},"request":{"method":"DELETE","scheme":"https","host":"api.dev.example.com","port":443,"path":"/v1/accounts/1001/sessions","headers":[["Cookie","sid=bob; theme=dark"]],"content":""}}
+this is not valid json and must be skipped without failing the parse
+{"type":"http","request":{"method":"PUT","host":"api.dev.example.com","port":443,"scheme":"https","path":"/v1/accounts/1001","headers":[["Content-Type","application/json"]],"content":"{\"name\":\"bob\"}"}}

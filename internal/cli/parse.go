@@ -26,7 +26,7 @@ var (
 
 func init() {
 	parseCmd.Flags().StringVar(&parseFormat, "format", "auto",
-		"input format: har | curl | openapi | postman | auto")
+		"input format: har | curl | openapi | postman | mitmproxy | auto")
 	parseCmd.Flags().StringVar(&parseScope, "scope", "",
 		"path to a role-matrix YAML; its scope.include/exclude is applied as a filter")
 	parseCmd.Flags().BoolVar(&parseJSON, "json", false,
@@ -35,7 +35,7 @@ func init() {
 
 var parseCmd = &cobra.Command{
 	Use:   "parse <input>",
-	Short: "Parse a HAR, curl, OpenAPI 3.x, or Postman v2 capture and print deduplicated endpoints.",
+	Short: "Parse a HAR, curl, OpenAPI 3.x, Postman v2, or mitmproxy JSON capture and print deduplicated endpoints.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		input := args[0]
@@ -64,6 +64,8 @@ var parseCmd = &cobra.Command{
 			requests, err = parse.OpenAPI(f)
 		case "postman":
 			requests, err = parse.Postman(f)
+		case "mitmproxy":
+			requests, err = parse.Mitmproxy(f)
 		default:
 			return fmt.Errorf("parse: unknown format %q", format)
 		}
@@ -94,7 +96,7 @@ var parseCmd = &cobra.Command{
 // sniffing (first non-space byte).
 func detectFormat(path, requested string) (string, error) {
 	switch strings.ToLower(requested) {
-	case "har", "curl", "openapi", "postman":
+	case "har", "curl", "openapi", "postman", "mitmproxy":
 		return strings.ToLower(requested), nil
 	case "", "auto":
 		// fall through
@@ -104,12 +106,15 @@ func detectFormat(path, requested string) (string, error) {
 
 	// Extension hints first. OpenAPI specs are commonly .yaml/.yml/.json, but
 	// .json overlaps with HAR, so YAML extensions are the only unambiguous
-	// extension hint; JSON/.har still get content-sniffed below.
+	// extension hint; JSON/.har still get content-sniffed below. mitmproxy JSON
+	// dumps are commonly streamed as JSON Lines (.jsonl).
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".har":
 		return "har", nil
 	case ".yaml", ".yml":
 		return "openapi", nil
+	case ".jsonl", ".ndjson":
+		return "mitmproxy", nil
 	}
 
 	// Sniff a larger window so we can distinguish the JSON-object formats
@@ -125,12 +130,20 @@ func detectFormat(path, requested string) (string, error) {
 		if b == ' ' || b == '\t' || b == '\n' || b == '\r' {
 			continue
 		}
+		if b == '[' {
+			// A top-level JSON array is the mitmproxy JSON-dump shape; no other
+			// supported format is an array.
+			return "mitmproxy", nil
+		}
 		if b == '{' {
 			if looksLikeOpenAPI(buf) {
 				return "openapi", nil
 			}
 			if looksLikePostman(buf) {
 				return "postman", nil
+			}
+			if looksLikeMitmproxy(buf) {
+				return "mitmproxy", nil
 			}
 			return "har", nil
 		}
@@ -169,6 +182,25 @@ func looksLikePostman(buf []byte) bool {
 		return true
 	}
 	return false
+}
+
+// looksLikeMitmproxy reports whether a JSON head is a single mitmproxy flow
+// object (the JSON-Lines shape). mitmproxy flow state carries a top-level
+// "request" object alongside flow markers ("server_conn"/"client_conn" or a
+// "type" field) and, crucially, lacks HAR's "log" key. This runs only after
+// the OpenAPI and Postman sniffers, so the bar is just "a flow, not a HAR".
+func looksLikeMitmproxy(buf []byte) bool {
+	s := string(buf)
+	if strings.Contains(s, "\"log\"") {
+		return false // HAR
+	}
+	if !strings.Contains(s, "\"request\"") {
+		return false
+	}
+	return strings.Contains(s, "\"server_conn\"") ||
+		strings.Contains(s, "\"client_conn\"") ||
+		strings.Contains(s, "\"marked\"") ||
+		strings.Contains(s, "\"scheme\"")
 }
 
 func applyScope(reqs []*model.CapturedRequest, scope model.ScopeConfig) []*model.CapturedRequest {

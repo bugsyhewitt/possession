@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **mitmproxy JSON input parser** (`internal/parse/mitmproxy.go`): `scan` and
+  `parse` now accept a [mitmproxy](https://mitmproxy.org) JSON flow dump as a
+  fifth input format (`--format mitmproxy`) alongside HAR, curl, OpenAPI 3.x,
+  and Postman v2. Two stable text serializations are read — a **JSON array** of
+  flow objects and **JSON Lines** (one flow per line, `.jsonl`/`.ndjson`) — the
+  shapes the `jsondump`/`mitmdump` json addons emit. Each HTTP flow becomes one
+  `CapturedRequest`: the URL is rebuilt from `scheme`+`host`+`port`+`path`
+  (default `80`/`443` elided, non-default ports preserved, absolute-form paths
+  parsed directly); headers are read from either serialization
+  (`["Name","Value"]` pairs or `{"name","value"}` objects) and the `Cookie`
+  header is split into individual cookies; the body comes from the request's
+  `content`/`text` field. The HAR parser's hygiene is reused (static assets,
+  `text/css`/`application/javascript`, analytics hosts dropped) so a mitmproxy
+  dump and the equivalent HAR dedup identically. Non-HTTP flows (tcp/websocket/
+  dns) and one malformed flow or JSON-Lines line are skipped without failing the
+  parse. Auto-detection routes a top-level JSON array, a `.jsonl`/`.ndjson`
+  extension, or a JSON flow object (`request` + `scheme`/`server_conn`, no
+  `log`) to this parser. Native binary `.flow`/`.mitm` files are intentionally
+  out of scope — export as JSON or HAR. (v1.1 backlog: "mitmproxy flow files".)
+
 - **HTML reporter** (`--report html`, `internal/report/html.go`): a fifth
   output format that renders a single **self-contained, offline-interactive**
   HTML document — no external CSS/JS, no CDN links, no network fetches, so the

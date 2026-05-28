@@ -66,9 +66,12 @@ Items deliberately left out of v1.0 to keep the scope bounded:
   rule-based mutation).
 
 ### Input formats
-- Postman collection v2 parser.
-- OpenAPI 3.x parser (synthesize requests from schema + examples).
-- mitmproxy flow files.
+- ~~Postman collection v2 parser.~~ **Shipped.**
+- ~~OpenAPI 3.x parser (synthesize requests from schema + examples).~~ **Shipped.**
+- ~~mitmproxy flow files.~~ **Shipped** (`--format mitmproxy`): mitmproxy JSON
+  flow dumps — a JSON array of flows or JSON Lines (`.jsonl`/`.ndjson`), the
+  shapes the `jsondump`/`mitmdump` json addons emit. Native binary `.flow`
+  files are intentionally out of scope (export as JSON or HAR).
 
 ### Auth flows
 - Multi-step / stateful login flows (CSRF chains, OTP, redirect-heavy
