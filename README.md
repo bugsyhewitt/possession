@@ -26,7 +26,7 @@ HAR/curl/OpenAPI + role-matrix YAML
     → variant generation (identity-swap, object-swap, JWT, … × N identities)
     → replay engine (rate-limited, refresh-aware)
     → calibrated baseline + 10-branch verdict ladder
-    → Findings (verdict, confidence, severity, ASVS V8 controls)
+    → Findings (verdict, confidence + BOLA band, severity, ASVS V8 controls)
     → reporter (human | json | sarif)
 ```
 
@@ -237,6 +237,36 @@ dedupe across runs. Round-trips through `owenrumney/go-sarif/v3`.
 | 1    | Usage error (bad flag, missing file, unknown subcommand)                       |
 | 2    | Config error (invalid matrix YAML, unparseable input)                          |
 | 3    | Scan completed with at least one finding (suppressable with `--exit-zero`)     |
+
+## BOLA confidence band
+
+Every finding carries a numeric `confidence` (0–1, "how likely is this a
+real bypass?") **and** a categorical `confidence_band` that answers the
+operator-facing question: *is this a true BOLA, or just a 2xx error
+wrapper?*
+
+The single most common authz false positive is an API that returns
+`200 OK` with an error body (`{"error":"forbidden"}`) instead of a proper
+`403`. A naive "2xx ⇒ finding" scanner reports these as bypasses. possession
+instead grades each finding by how closely the variant's response body
+resembles the resource **owner's** baseline response:
+
+| Band     | Meaning                                                                                   |
+|----------|-------------------------------------------------------------------------------------------|
+| `high`   | Body near-identical to the owner's resource (or owner marker reflected) — **true BOLA**.  |
+| `medium` | Body partially resembles the owner's resource — plausible bypass, verify.                 |
+| `low`    | Body diverges from the owner baseline despite a 2xx — **likely an error wrapper**.        |
+
+The band is derived from both the numeric confidence and the body
+similarity, so a high-confidence verdict on a divergent body is still
+capped at `low`. A decisive owner-marker reflection (the owner's unique
+data literally present in the body) always qualifies for `high`, even when
+the surrounding body differs.
+
+In the human report the band is its own `BAND` column in the findings
+table; in JSON it is the `confidence_band` field; in SARIF it is the
+`confidence_band` property. Sort or filter on it to triage the true BOLAs
+first and push the 2xx-error-wrapper noise to the bottom.
 
 ## Suppression (allowlist)
 

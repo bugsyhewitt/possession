@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **BOLA confidence band** (POST_V01 Item 5): every finding now carries a
+  categorical `confidence_band` (`high`/`medium`/`low`) alongside the numeric
+  `confidence`, derived from both the numeric confidence and the variant
+  response body's similarity to the resource owner's baseline. This separates
+  true BOLAs (body near-identical to the owner's resource ⇒ `high`) from the
+  most common authz false positive — an API returning `200 OK` with an error
+  body (`{"error":"forbidden"}`) instead of a `403`, whose body diverges from
+  the owner baseline and is therefore capped at `low` regardless of numeric
+  confidence. A decisive owner-marker reflection clears the similarity gate
+  and qualifies for `high` even when the surrounding body differs. The band
+  is surfaced as a new `BAND` column in the human reporter, the
+  `confidence_band` field in JSON, and a `confidence_band` property in SARIF.
+  Tuning constants (`BandHighSimFloor`, `BandMediumSimFloor`, `BandHighConfFloor`,
+  `BandMediumConfFloor`) live in `internal/detect/tuning.go` alongside the rest
+  of the calibration; the classifier is `detect.ClassifyConfidenceBand`.
+
 - **Token-level JWT auth-bypass mutator** (`internal/mutate/jwt_auth.go`),
   gated behind `--jwt-attack` (off by default — noisier than identity swap).
   Where the existing mutators swap *identities*, this attacks the *token

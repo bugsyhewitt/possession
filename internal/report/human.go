@@ -69,6 +69,15 @@ func renderHeader(w io.Writer, run *model.RunResult) {
 // severityOrder is critical → info; used for grouped output.
 var severityOrder = []string{"critical", "high", "medium", "low", "info"}
 
+// bandLabel renders a finding's BOLA confidence band for the table,
+// substituting a dash for an unset band so the column never blanks out.
+func bandLabel(band string) string {
+	if band == "" {
+		return "-"
+	}
+	return band
+}
+
 func renderFindings(w io.Writer, run *model.RunResult) {
 	fmt.Fprintln(w, "─── findings ──────────────────────────────────────────────────")
 	if len(run.Findings) == 0 {
@@ -92,11 +101,11 @@ func renderFindings(w io.Writer, run *model.RunResult) {
 		})
 		fmt.Fprintf(w, "\n  %s (%d):\n", strings.ToUpper(sev), len(group))
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "    CLASS\tENDPOINT\tVERDICT\tCONF\tMUTATION\tASVS")
+		fmt.Fprintln(tw, "    CLASS\tENDPOINT\tVERDICT\tCONF\tBAND\tMUTATION\tASVS")
 		for _, f := range group {
 			asvs := strings.Join(f.ASVS, ",")
-			fmt.Fprintf(tw, "    %s\t%s\t%s\t%.2f\t%s\t%s\n",
-				f.Class, f.EndpointKey, f.Verdict, f.Confidence, f.Mutation, asvs)
+			fmt.Fprintf(tw, "    %s\t%s\t%s\t%.2f\t%s\t%s\t%s\n",
+				f.Class, f.EndpointKey, f.Verdict, f.Confidence, bandLabel(f.ConfidenceBand), f.Mutation, asvs)
 		}
 		tw.Flush()
 		// One-line signal trace per finding.

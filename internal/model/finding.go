@@ -7,14 +7,23 @@ package model
 // counted in the run summary).
 type Finding struct {
 	ID         string    `json:"id"`
-	Endpoint   *Endpoint `json:"-"` // serialized separately via EndpointKey
-	Variant    *Variant  `json:"-"` // serialized separately via VariantID
-	Class      string    `json:"class"` // idor | privesc | authn-bypass | auth-dependency
-	Verdict    string    `json:"verdict"` // bypass | suspected
+	Endpoint   *Endpoint `json:"-"`          // serialized separately via EndpointKey
+	Variant    *Variant  `json:"-"`          // serialized separately via VariantID
+	Class      string    `json:"class"`      // idor | privesc | authn-bypass | auth-dependency
+	Verdict    string    `json:"verdict"`    // bypass | suspected
 	Confidence float64   `json:"confidence"` // 0..1
-	Severity   string    `json:"severity"`   // critical | high | medium | low | info
-	ASVS       []string  `json:"asvs"`       // e.g. ["v5.0.0-8.2.2"]
-	Evidence   Evidence  `json:"evidence"`
+
+	// ConfidenceBand is the categorical BOLA-confidence label derived from
+	// Confidence + response-body similarity to the owner baseline:
+	//   high   — body near-identical to owner's resource (true BOLA)
+	//   medium — partial match / suspected verdict
+	//   low    — body diverges from owner despite 2xx (likely error wrapper)
+	// See detect.ClassifyConfidenceBand.
+	ConfidenceBand string `json:"confidence_band"` // high | medium | low
+
+	Severity string   `json:"severity"` // critical | high | medium | low | info
+	ASVS     []string `json:"asvs"`     // e.g. ["v5.0.0-8.2.2"]
+	Evidence Evidence `json:"evidence"`
 
 	// Convenience fields for serialization — fully derivable from
 	// Endpoint+Variant but flattened so JSON consumers don't need to
