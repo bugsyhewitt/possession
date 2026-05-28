@@ -77,8 +77,10 @@ Items deliberately left out of v1.0 to keep the scope bounded:
 - OAuth2 PKCE / state mutators.
 
 ### Reporting
-- HTML reporter (offline interactive view with collapsible signal
-  traces).
+- ~~HTML reporter (offline interactive view with collapsible signal
+  traces).~~ **Shipped** (`--report html`): single self-contained
+  document, severity-grouped findings, collapsible repro blocks,
+  progressive-enhancement severity filter.
 - Markdown reporter for PR comments.
 - ~~Suppression / baseline file (`possession.allowlist`) so re-runs only
   surface new findings.~~ **Shipped in v1.2.**

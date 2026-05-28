@@ -48,7 +48,7 @@ var (
 	scanUpdateAllowlist bool   // merge current findings into the allowlist file
 	scanEnumerate       int    // --enumerate N: sequential ID enumeration range (0 = off)
 	scanJWTAttack       bool   // --jwt-attack: forge alg:none + blank-secret tokens (off by default)
-	scanReproCreds      bool   // --repro-creds: emit live credentials in markdown repro blocks (off by default)
+	scanReproCreds      bool   // --repro-creds: emit live credentials in markdown/html repro blocks (off by default)
 	scanLearnMarkers    bool   // --learn-markers: harvest per-identity markers from owner baselines (off by default)
 	scanRecord          string // --record <dir>: persist every variant+baseline response to disk (off by default)
 	scanReplay          string // --replay <dir>: re-run detection over a saved recording, firing no requests (off by default)
@@ -84,7 +84,7 @@ func init() {
 	scanCmd.Flags().Float64Var(&scanMinConfidence, "min-confidence", 0.0,
 		"omit findings with confidence below this from the findings array (summary still counts them)")
 	scanCmd.Flags().StringVar(&scanReport, "report", "human",
-		"output format: human | json | sarif | markdown (markdown emits PR-ready per-finding HTTP/curl repro blocks)")
+		"output format: human | json | sarif | markdown | html (markdown emits PR-ready per-finding HTTP/curl repro blocks; html is a single self-contained offline-interactive document)")
 	scanCmd.Flags().BoolVar(&scanExitZero, "exit-zero", false,
 		"exit 0 even when findings are present (useful in CI pipelines that gate elsewhere)")
 	scanCmd.Flags().StringVar(&scanJWTWordlist, "jwt-wordlist", "",
@@ -100,7 +100,7 @@ func init() {
 	scanCmd.Flags().BoolVar(&scanJWTAttack, "jwt-attack", false,
 		"forge token-level auth-bypass JWTs for each captured Bearer token: alg:none + blank-secret (off by default; noisier than identity swap)")
 	scanCmd.Flags().BoolVar(&scanReproCreds, "repro-creds", false,
-		"emit live credential values in --report markdown reproduction blocks (off by default; repros redact tokens to <bearer:identity> placeholders so reports are safe to paste publicly)")
+		"emit live credential values in --report markdown/html reproduction blocks (off by default; repros redact tokens to <bearer:identity> placeholders so reports are safe to paste publicly)")
 	scanCmd.Flags().BoolVar(&scanLearnMarkers, "learn-markers", false,
 		"learn each identity's unique data markers automatically from owner-baseline responses (augments, never overrides, matrix-supplied markers; strengthens the decisive owner-reflection IDOR signal)")
 	scanCmd.Flags().StringVar(&scanRecord, "record", "",

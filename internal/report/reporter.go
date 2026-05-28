@@ -8,7 +8,7 @@ import (
 )
 
 // Reporter renders a RunResult to a writer. Implementations: HumanReporter,
-// JSONReporter, SARIFReporter, MarkdownReporter.
+// JSONReporter, SARIFReporter, MarkdownReporter, HTMLReporter.
 type Reporter interface {
 	Name() string
 	Render(run *model.RunResult, w io.Writer) error
@@ -22,9 +22,9 @@ func New(name string) (Reporter, error) {
 	return NewWithOpts(name, ReproOptions{})
 }
 
-// NewWithOpts is New with reproduction options. opts currently only affects
-// the markdown reporter (credential redaction in per-finding repro blocks);
-// other reporters ignore it.
+// NewWithOpts is New with reproduction options. opts affects the markdown and
+// html reporters (credential redaction in per-finding repro blocks); the other
+// reporters ignore it.
 func NewWithOpts(name string, opts ReproOptions) (Reporter, error) {
 	switch name {
 	case "human", "":
@@ -35,7 +35,9 @@ func NewWithOpts(name string, opts ReproOptions) (Reporter, error) {
 		return SARIFReporter{}, nil
 	case "markdown":
 		return MarkdownReporter{ReproOpts: opts}, nil
+	case "html":
+		return HTMLReporter{ReproOpts: opts}, nil
 	default:
-		return nil, fmt.Errorf("unknown reporter %q (want one of: human, json, sarif, markdown)", name)
+		return nil, fmt.Errorf("unknown reporter %q (want one of: human, json, sarif, markdown, html)", name)
 	}
 }

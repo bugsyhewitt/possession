@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **HTML reporter** (`--report html`, `internal/report/html.go`): a fifth
+  output format that renders a single **self-contained, offline-interactive**
+  HTML document — no external CSS/JS, no CDN links, no network fetches, so the
+  styling and interactivity travel with the file (archive it, attach it to a
+  ticket, open it on an air-gapped box). Findings are grouped by severity with
+  colour-coded badges; each carries a metadata table, signal trace, the
+  owner-baseline → variant differential, and a collapsible **Reproduction**
+  block (raw HTTP + `curl`) built on native `<details>`/`<summary>` so the
+  report is fully readable with JavaScript disabled. A small inline script adds
+  severity filtering as progressive enhancement. Reproductions reuse the shared
+  `BuildRepro` path: credentials are **redacted by default** to
+  identity-tagged placeholders (`<bearer:bob>`), honour `--repro-creds` for
+  live tokens, and all finding-derived data is HTML-escaped so untrusted
+  response content cannot inject markup. Output is byte-stable across runs.
+  (v1.1 backlog: "HTML reporter — offline interactive view with collapsible
+  signal traces".)
+
 - **Postman Collection v2 input parser** (`internal/parse/postman.go`): `scan`
   and `parse` now accept a Postman Collection v2.0/v2.1 export (the format the
   Postman app produces) as a fourth input format alongside HAR, curl, and

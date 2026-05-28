@@ -27,7 +27,7 @@ HAR/curl/OpenAPI/Postman + role-matrix YAML
     → replay engine (rate-limited, refresh-aware)
     → calibrated baseline + 10-branch verdict ladder
     → Findings (verdict, confidence + BOLA band, severity, ASVS V8 controls)
-    → reporter (human | json | sarif | markdown)
+    → reporter (human | json | sarif | markdown | html)
 ```
 
 possession swaps both halves of an access-control test. The `swap-identity`
@@ -312,6 +312,31 @@ possession scan capture.har \
     --out report.md
 ```
 
+### `--report html`
+
+A single **self-contained, offline-interactive** HTML document — no
+external CSS/JS, no CDN links, no network fetches. Open it in any
+browser, archive it, or attach it to a ticket and the styling and
+interactivity travel with the file. Findings are grouped by severity
+with colour-coded badges; each carries the metadata table, signal
+trace, owner-baseline → variant **differential**, and a collapsible
+**Reproduction** block (raw HTTP + `curl`), all built on native
+`<details>`/`<summary>` so the report stays fully readable with
+JavaScript disabled. A small inline script adds severity filtering as
+progressive enhancement.
+
+Credentials are **redacted by default** to identity-tagged
+placeholders (`<bearer:bob>`); add `--repro-creds` for live tokens in
+local triage. Finding data is HTML-escaped, so untrusted response
+content can never inject markup.
+
+```bash
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --report html \
+    --out report.html
+```
+
 ## Exit codes
 
 | Code | Meaning                                                                        |
@@ -450,8 +475,9 @@ changes, and re-scanning a target you only have permission to hit once.
   429/503 backoff, Tier-1 dynamic refresh hooks.
 - Calibrated N-sample baseline, 10-branch verdict ladder, ASVS V8
   control mapping.
-- Four reporters: human, json, sarif, markdown (markdown carries
-  paste-ready per-finding HTTP/curl reproduction blocks).
+- Five reporters: human, json, sarif, markdown, html (markdown and
+  html carry paste-ready per-finding HTTP/curl reproduction blocks; html
+  is a single self-contained offline-interactive document).
 - Integration corpus with Gate-E enforcement: secureapp scans MUST
   produce zero bypass findings.
 
