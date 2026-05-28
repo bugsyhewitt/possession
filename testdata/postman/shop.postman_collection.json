@@ -1,0 +1,102 @@
+{
+  "info": {
+    "_postman_id": "11111111-2222-3333-4444-555555555555",
+    "name": "Shop API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/health",
+          "protocol": "https",
+          "host": ["{{host}}"],
+          "path": ["health"]
+        }
+      }
+    },
+    {
+      "name": "Accounts",
+      "item": [
+        {
+          "name": "Get account",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "X-Skip", "value": "nope", "disabled": true }
+            ],
+            "url": {
+              "raw": "https://{{host}}/accounts/{{account_id}}?expand=true",
+              "protocol": "https",
+              "host": ["{{host}}"],
+              "path": ["accounts", "{{account_id}}"],
+              "query": [
+                { "key": "expand", "value": "true" },
+                { "key": "drop", "value": "x", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create account",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"owner\":\"{{account_id}}\",\"plan\":\"pro\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "https://{{host}}/accounts",
+              "protocol": "https",
+              "host": ["{{host}}"],
+              "path": ["accounts"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Login form",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            { "key": "user", "value": "alice" },
+            { "key": "pass", "value": "secret" },
+            { "key": "ignored", "value": "x", "disabled": true }
+          ]
+        },
+        "url": {
+          "raw": "https://{{host}}/login",
+          "protocol": "https",
+          "host": ["{{host}}"],
+          "path": ["login"]
+        }
+      }
+    },
+    {
+      "name": "Bare string URL",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "https://api.example.com/v1/ping?token={{token}}"
+      }
+    }
+  ],
+  "variable": [
+    { "key": "host", "value": "api.example.com" },
+    { "key": "base_url", "value": "https://api.example.com" },
+    { "key": "account_id", "value": "1001" },
+    { "key": "token", "value": "tok_alice" }
+  ]
+}

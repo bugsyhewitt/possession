@@ -1,0 +1,31 @@
+{
+  "info": {
+    "name": "Scoped Vars",
+    "schema": "https://schema.getpostman.com/json/collection/v2.0.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Tenant A",
+      "variable": [
+        { "key": "tenant", "value": "aaa" }
+      ],
+      "item": [
+        {
+          "name": "Whoami",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "host": ["{{host}}"],
+              "path": ["t", "{{tenant}}", "whoami"]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "host", "value": "svc.example.com" },
+    { "key": "tenant", "value": "DEFAULT" }
+  ]
+}
