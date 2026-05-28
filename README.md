@@ -27,7 +27,7 @@ HAR/curl/OpenAPI + role-matrix YAML
     → replay engine (rate-limited, refresh-aware)
     → calibrated baseline + 10-branch verdict ladder
     → Findings (verdict, confidence + BOLA band, severity, ASVS V8 controls)
-    → reporter (human | json | sarif)
+    → reporter (human | json | sarif | markdown)
 ```
 
 possession swaps both halves of an access-control test. The `swap-identity`
@@ -229,6 +229,28 @@ ASVS v5.0.0 V8 controls in `helpUri` + property bag. One result per
 finding with `partialFingerprints` keyed off `Finding.ID` for
 dedupe across runs. Round-trips through `owenrumney/go-sarif/v3`.
 
+### `--report markdown`
+
+GitHub-flavored Markdown built for PR comments and bug-bounty
+submissions. Impact-first: a summary header, then one section per
+finding (ordered by severity) with an at-a-glance metadata table, the
+signal trace, the owner-baseline → variant **differential**, and a
+collapsible **Reproduction** block carrying the exact mutated request
+as both a raw HTTP block and a `curl` one-liner — paste-ready, no
+reconstruction from JSON required.
+
+Credential values (`Authorization`, `Cookie`, `X-Api-Key`, …) are
+**redacted by default** to identity-tagged placeholders like
+`<bearer:bob>`, so a report is safe to paste publicly. Add
+`--repro-creds` to emit live tokens for local triage:
+
+```bash
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --report markdown \
+    --out report.md
+```
+
 ## Exit codes
 
 | Code | Meaning                                                                        |
@@ -325,7 +347,8 @@ Allowlist entries that no longer match any finding are silently ignored.
   429/503 backoff, Tier-1 dynamic refresh hooks.
 - Calibrated N-sample baseline, 10-branch verdict ladder, ASVS V8
   control mapping.
-- Three reporters: human, json, sarif.
+- Four reporters: human, json, sarif, markdown (markdown carries
+  paste-ready per-finding HTTP/curl reproduction blocks).
 - Integration corpus with Gate-E enforcement: secureapp scans MUST
   produce zero bypass findings.
 
@@ -340,7 +363,7 @@ Deliberately deferred to keep v1.0 scope bounded. See
   place).
 - Stateful login flows (CSRF chains, multi-step OAuth).
 - Postman / mitmproxy input formats.
-- HTML and Markdown reporters.
+- HTML reporter (the Markdown reporter shipped post-v0.1).
 - ASVS V9 (Self-Contained Tokens) control mapping — currently
   omitted (Gate F: not inventing control IDs we can't verify).
 
