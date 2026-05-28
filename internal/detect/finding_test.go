@@ -81,6 +81,37 @@ func TestBuildFinding_SeverityAndASVS(t *testing.T) {
 	}
 }
 
+// TestBuildFinding_JWTAttackSeverityOverride verifies the --jwt-attack
+// mutator types are pinned to HIGH severity (overriding the authn-bypass
+// class default of critical), and that suspected verdicts still drop one
+// notch (high→medium).
+func TestBuildFinding_JWTAttackSeverityOverride(t *testing.T) {
+	ep := &model.Endpoint{Method: "GET", Host: "h", PathTemplate: "/x"}
+	cal := mkCal("baseline", 200, false, false, false, 0.85)
+
+	cases := []struct {
+		mutator string
+		verdict string
+		wantSev string
+	}{
+		{"jwt-attack-none", VerdictBypass, "high"},
+		{"jwt-attack-blank-secret", VerdictBypass, "high"},
+		{"jwt-attack-none", VerdictSuspected, "medium"},
+		{"jwt-attack-blank-secret", VerdictSuspected, "medium"},
+	}
+	for _, c := range cases {
+		v := &model.Variant{ID: "v1", Mutation: model.Mutation{Type: c.mutator, Class: "authn-bypass"}}
+		vv := VariantVerdict{Verdict: c.verdict, Confidence: 0.5}
+		f := BuildFinding(ep, v, &model.Response{Status: 200}, vv, cal)
+		if f.Severity != c.wantSev {
+			t.Errorf("%s %s: severity want %s got %s", c.mutator, c.verdict, c.wantSev, f.Severity)
+		}
+		if f.Class != "authn-bypass" {
+			t.Errorf("%s: class want authn-bypass got %s", c.mutator, f.Class)
+		}
+	}
+}
+
 func TestBuildFinding_DeterministicID(t *testing.T) {
 	ep := &model.Endpoint{Method: "GET", Host: "h", PathTemplate: "/x"}
 	v := &model.Variant{ID: "v1", Mutation: model.Mutation{Type: "swap-identity"}}

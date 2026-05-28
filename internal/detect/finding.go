@@ -26,6 +26,14 @@ func BuildFinding(ep *model.Endpoint, v *model.Variant, r *model.Response, vv Va
 	}
 
 	severity := SeverityByClass[class]
+	// Per-mutator severity override (e.g. --jwt-attack pins HIGH rather
+	// than the authn-bypass class default of critical). Applied to the
+	// base severity before the suspected-verdict downgrade.
+	if v != nil {
+		if ov, ok := SeverityOverrideByMutator[v.Mutation.Type]; ok {
+			severity = ov
+		}
+	}
 	if vv.Verdict == VerdictSuspected {
 		if d, ok := DowngradeSeverity[severity]; ok {
 			severity = d

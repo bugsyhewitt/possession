@@ -39,6 +39,10 @@ horizontal-IDOR / BOLA test: "can alice, using alice's own token, read bob's
 object?" Give each identity a `resources` map (e.g. `order_id: "12345"`) and
 `swap-object` fires automatically.
 
+The optional `--jwt-attack` mutator goes a step further and attacks the token
+itself — forging `alg:none` and blank-secret JWTs to probe for verifier
+misconfigurations. See [Token-level JWT attacks](#token-level-jwt-attacks---jwt-attack).
+
 ## Install
 
 ### From source (Go 1.26+)
@@ -128,6 +132,36 @@ This is a pragmatic subset — external `$ref`s and full `oneOf`/`anyOf`
 composition are not evaluated — but it covers the paths + required params +
 example bodies that most real specs carry. Synthesized endpoints feed every
 mutator, including `swap-object`, exactly like HAR/curl captures.
+
+## Token-level JWT attacks (`--jwt-attack`)
+
+possession's default mutators attack *who* a token claims to be (identity
+swap, claim tampering). The `--jwt-attack` flag adds a mutator that attacks
+the *token itself* — the two most common JWT verification misconfigurations:
+
+```bash
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --jwt-attack
+```
+
+For every captured `Authorization: Bearer <jwt>` (and any auth header,
+auth cookie, or JSON body token field that decodes as a JWT), it forges two
+auth-bypass variants:
+
+| Variant      | Finding ID                     | What it sends                                                              |
+|--------------|--------------------------------|---------------------------------------------------------------------------|
+| `alg:none`   | `POSSESSION-JWT-NONE`          | header rewritten to `{"alg":"none","typ":"JWT"}`, signature dropped (`<header>.<payload>.`) |
+| blank-secret | `POSSESSION-JWT-BLANK-SECRET`  | original claims re-signed with HS256 using an **empty string** as the HMAC key |
+
+Both findings are class `authn-bypass`, severity **HIGH**. A 2xx that
+matches the owner baseline means the verifier accepted a token an attacker
+can forge with no knowledge of the real signing key.
+
+`--jwt-attack` is **off by default**: forging tokens is noisier than
+replaying real ones, so it is opt-in. No external JWT library is used — the
+tokens are constructed by base64url-decoding the captured header/payload,
+re-encoding, and (for blank-secret) HMAC-signing with `""`.
 
 ## Role matrix
 
