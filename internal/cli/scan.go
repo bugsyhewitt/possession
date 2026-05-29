@@ -63,6 +63,7 @@ var (
 	scanMethodOverride  bool   // --method-override: inject method-override headers + swap/case-toggle the request verb to bypass verb-based access control (off by default)
 	scanHostHeader      bool   // --host-header: override the Host + inject forwarded-host headers to reach a host-gated resource (off by default)
 	scanCookieTamper    bool   // --cookie-tampering: flip a client-controllable privilege claim inside an auth cookie value (plaintext or base64) using the caller's own credentials (off by default)
+	scanHeaderInject    bool   // --header-injection: inject trusted-proxy headers (client-IP / identity assertions) the backend mis-trusts, using the caller's own credentials (off by default)
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -140,6 +141,8 @@ func init() {
 		"test host-routing 403/401 access-control bypass using the caller's own credentials: override the wire Host (127.0.0.1, localhost, internal) to reach an internal/loopback virtual host, and inject forwarded-host override headers (X-Forwarded-Host, X-Host, X-Forwarded-Server, X-HTTP-Host-Override, Forwarded) a fronting proxy may trust for routing or link generation; a request that succeeds against a spoofed host where the public host did not is a host-header authorization bypass; off by default because the spoofed-host variants actively probe the routing layer and can reach internal-only vhosts on a misconfigured proxy")
 	scanCmd.Flags().BoolVar(&scanCookieTamper, "cookie-tampering", false,
 		"test cookie-trusting privilege escalation using the caller's own credentials: flip a client-controllable authorization claim inside an auth cookie value from its unprivileged to its privileged form (role=user→admin, admin=0→1, is_admin=false→true, verified=false→true), in both plaintext delimited values and base64-wrapped (std/url, padded/raw) values that decode to a printable claim; a request that gains elevated privilege after a one-claim flip is trusting unsigned cookie state for authorization; JWT-shaped cookie values are left to the JWT mutators; off by default because the flipped-claim variants actively assert elevated privilege against the access-control layer")
+	scanCmd.Flags().BoolVar(&scanHeaderInject, "header-injection", false,
+		"test trusted-proxy header access-control bypass using the caller's own credentials: inject a trusted-client-IP header (X-Real-IP, X-Client-IP, X-Originating-IP, X-Remote-IP, X-Remote-Addr) set to the loopback so an IP-gated internal/admin rule treats the caller as inside the trust boundary, and inject a proxy-set identity-assertion header (X-Authenticated-User, X-Remote-User, X-Forwarded-User, X-User, X-WEBAUTH-USER) naming a privileged principal so a backend that trusts a forwarded identity grants elevated access; a request that succeeds under an injected trusted header where the baseline did not is a header-injection authorization bypass; disjoint from the headers --forbidden-bypass and --host-header inject; not CRLF/response-splitting (values are well-formed tokens); off by default because the spoofed-trust variants actively assert internal-origin/privileged identity against the access-control layer")
 }
 
 func resetScanFlags() {
@@ -178,6 +181,7 @@ func resetScanFlags() {
 	scanMethodOverride = false
 	scanHostHeader = false
 	scanCookieTamper = false
+	scanHeaderInject = false
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -301,7 +305,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// derived from its representative sample's auth components.
 	attributionWarnings := attributeEndpoints(endpoints, matrix)
 
-	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate, scanJWTAttack, scanMassAssign, scanXXE, scanGraphQL, scanForbidBypass, scanWSHijack, scanCSRFHeader, scanMethodOverride, scanHostHeader, scanCookieTamper)
+	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate, scanJWTAttack, scanMassAssign, scanXXE, scanGraphQL, scanForbidBypass, scanWSHijack, scanCSRFHeader, scanMethodOverride, scanHostHeader, scanCookieTamper, scanHeaderInject)
 	if err != nil {
 		return err
 	}
@@ -1214,14 +1218,15 @@ func buildEvaluator(name string, matrix *model.RoleMatrix) (detect.Evaluator, er
 // WSHijack (--ws-hijack) mutator when wsHijack is true, enabling the
 // CSRFHeader (--csrf-header) mutator when csrfHeader is true, and enabling the
 // MethodOverride (--method-override) mutator when methodOverride is true, and
-// enabling the HostHeader (--host-header) mutator when hostHeader is true, and
+// enabling the HostHeader (--host-header) mutator when hostHeader is true,
 // enabling the CookieTamper (--cookie-tampering) mutator when cookieTamper is
-// true.
+// true, and enabling the HeaderInjection (--header-injection) mutator when
+// headerInjection is true.
 // EnumerateID, JWTAuth, MassAssign, XXE, GraphQL, ForbiddenBypass, WSHijack,
-// CSRFHeader, MethodOverride, HostHeader, and CookieTamper are always registered
-// but inert in their disabled state, so the canonical DefaultRegistry order (and
-// the order test) stays unchanged.
-func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, xxe, graphql, forbidBypass, wsHijack, csrfHeader, methodOverride, hostHeader, cookieTamper bool) (*mutate.Registry, error) {
+// CSRFHeader, MethodOverride, HostHeader, CookieTamper, and HeaderInjection are
+// always registered but inert in their disabled state, so the canonical
+// DefaultRegistry order (and the order test) stays unchanged.
+func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, xxe, graphql, forbidBypass, wsHijack, csrfHeader, methodOverride, hostHeader, cookieTamper, headerInjection bool) (*mutate.Registry, error) {
 	enumMutator := mutate.EnumerateID{N: enumerateN}
 	jwtAuthMutator := mutate.JWTAuth{Enabled: jwtAttack}
 	massAssignMutator := mutate.MassAssign{Enabled: massAssign}
@@ -1233,13 +1238,15 @@ func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, x
 	methodOverrideMutator := mutate.MethodOverride{Enabled: methodOverride}
 	hostHeaderMutator := mutate.HostHeader{Enabled: hostHeader}
 	cookieTamperMutator := mutate.CookieTamper{Enabled: cookieTamper}
+	headerInjectionMutator := mutate.HeaderInjection{Enabled: headerInjection}
 
 	if wordlistPath == "" {
 		// Extend the default registry with EnumerateID + JWTAuth +
 		// MassAssign + XXE + GraphQL + ForbiddenBypass + WSHijack + CSRFHeader +
-		// MethodOverride + HostHeader + CookieTamper (all no-op when disabled).
+		// MethodOverride + HostHeader + CookieTamper + HeaderInjection (all no-op
+		// when disabled).
 		base := mutate.DefaultRegistry()
-		all := append(base.All(), enumMutator, jwtAuthMutator, massAssignMutator, xxeMutator, graphqlMutator, forbidMutator, wsHijackMutator, csrfHeaderMutator, methodOverrideMutator, hostHeaderMutator, cookieTamperMutator)
+		all := append(base.All(), enumMutator, jwtAuthMutator, massAssignMutator, xxeMutator, graphqlMutator, forbidMutator, wsHijackMutator, csrfHeaderMutator, methodOverrideMutator, hostHeaderMutator, cookieTamperMutator, headerInjectionMutator)
 		return mutate.NewRegistry(all...), nil
 	}
 	data, err := os.ReadFile(wordlistPath)
@@ -1277,6 +1284,7 @@ func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, x
 		methodOverrideMutator,
 		hostHeaderMutator,
 		cookieTamperMutator,
+		headerInjectionMutator,
 	), nil
 }
 
