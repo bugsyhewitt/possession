@@ -172,6 +172,34 @@ func TestParseCommandMitmproxyAutoDetectJSONL(t *testing.T) {
 	}
 }
 
+func TestParseCommandBurpExplicit(t *testing.T) {
+	out, err := runCmd(t, "parse", "../../testdata/burp/shop.items.xml", "--format", "burp")
+	if err != nil {
+		t.Fatalf("parse: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "/api/users/{id}/profile") {
+		t.Errorf("expected templated burp endpoint in output:\n%s", out)
+	}
+	if !strings.Contains(out, "/api/cart/items") {
+		t.Errorf("expected POST cart endpoint in output:\n%s", out)
+	}
+	// Static asset and analytics host must be filtered out.
+	if strings.Contains(out, "app.js") || strings.Contains(out, "google-analytics") {
+		t.Errorf("filtered traffic leaked into output:\n%s", out)
+	}
+}
+
+func TestParseCommandBurpAutoDetectXML(t *testing.T) {
+	// The .xml extension is the unambiguous Burp items-export hint.
+	out, err := runCmd(t, "parse", "../../testdata/burp/shop.items.xml")
+	if err != nil {
+		t.Fatalf("parse auto xml: %v\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(out, "/api/users/{id}/profile") {
+		t.Errorf("auto-detect failed to route .xml to burp:\n%s", out)
+	}
+}
+
 func TestDetectFormatOpenAPI(t *testing.T) {
 	cases := []struct {
 		path, requested, want string
@@ -182,9 +210,11 @@ func TestDetectFormatOpenAPI(t *testing.T) {
 		{"../../testdata/postman/shop.postman_collection.json", "auto", "postman"},
 		{"../../testdata/mitmproxy/shop.flows.json", "auto", "mitmproxy"},
 		{"../../testdata/mitmproxy/stream.flows.jsonl", "auto", "mitmproxy"},
+		{"../../testdata/burp/shop.items.xml", "auto", "burp"},
 		{"x", "openapi", "openapi"},
 		{"x", "postman", "postman"},
 		{"x", "mitmproxy", "mitmproxy"},
+		{"x", "burp", "burp"},
 	}
 	for _, c := range cases {
 		got, err := detectFormat(c.path, c.requested)

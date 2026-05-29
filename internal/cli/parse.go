@@ -26,7 +26,7 @@ var (
 
 func init() {
 	parseCmd.Flags().StringVar(&parseFormat, "format", "auto",
-		"input format: har | curl | openapi | postman | mitmproxy | auto")
+		"input format: har | curl | openapi | postman | mitmproxy | burp | auto")
 	parseCmd.Flags().StringVar(&parseScope, "scope", "",
 		"path to a role-matrix YAML; its scope.include/exclude is applied as a filter")
 	parseCmd.Flags().BoolVar(&parseJSON, "json", false,
@@ -35,7 +35,7 @@ func init() {
 
 var parseCmd = &cobra.Command{
 	Use:   "parse <input>",
-	Short: "Parse a HAR, curl, OpenAPI 3.x, Postman v2, or mitmproxy JSON capture and print deduplicated endpoints.",
+	Short: "Parse a HAR, curl, OpenAPI 3.x, Postman v2, mitmproxy JSON, or Burp XML capture and print deduplicated endpoints.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		input := args[0]
@@ -66,6 +66,8 @@ var parseCmd = &cobra.Command{
 			requests, err = parse.Postman(f)
 		case "mitmproxy":
 			requests, err = parse.Mitmproxy(f)
+		case "burp":
+			requests, err = parse.Burp(f)
 		default:
 			return fmt.Errorf("parse: unknown format %q", format)
 		}
@@ -96,7 +98,7 @@ var parseCmd = &cobra.Command{
 // sniffing (first non-space byte).
 func detectFormat(path, requested string) (string, error) {
 	switch strings.ToLower(requested) {
-	case "har", "curl", "openapi", "postman", "mitmproxy":
+	case "har", "curl", "openapi", "postman", "mitmproxy", "burp":
 		return strings.ToLower(requested), nil
 	case "", "auto":
 		// fall through
@@ -115,6 +117,10 @@ func detectFormat(path, requested string) (string, error) {
 		return "openapi", nil
 	case ".jsonl", ".ndjson":
 		return "mitmproxy", nil
+	case ".xml":
+		// Burp "Save items" / proxy-history exports are XML; no other supported
+		// format is XML, so the extension is unambiguous.
+		return "burp", nil
 	}
 
 	// Sniff a larger window so we can distinguish the JSON-object formats
@@ -129,6 +135,11 @@ func detectFormat(path, requested string) (string, error) {
 	for _, b := range buf {
 		if b == ' ' || b == '\t' || b == '\n' || b == '\r' {
 			continue
+		}
+		if b == '<' {
+			// A leading '<' is XML — the Burp items export ('<?xml ...' or
+			// '<items>'). No other supported format is XML.
+			return "burp", nil
 		}
 		if b == '[' {
 			// A top-level JSON array is the mitmproxy JSON-dump shape; no other
