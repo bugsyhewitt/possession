@@ -618,6 +618,58 @@ assert elevated privilege against the access-control layer, so it only fires whe
 you opt in — mirroring the gating of `--host-header`, `--forbidden-bypass`,
 `--method-override`, `--csrf-header`, `--ws-hijack`, `--xxe`, and `--mass-assign`.
 
+## Trusted-header injection (`--header-injection`)
+
+Where `--host-header` attacks *which host the access-control layer trusts* and
+`--cookie-tampering` attacks *which authorization state the app trusts inside a
+cookie*, `--header-injection` attacks *which trusted-proxy assertion the backend
+believes about the caller*. The classic broken-access-control pattern: a backend
+trusts request headers it assumes a fronting proxy (load balancer, API gateway,
+WAF, auth proxy) populated — and makes a routing or authorization decision from
+them — but the header is in fact reachable from the untrusted client edge. A
+caller who sets the header directly is treated as though the trusted proxy
+vouched for them. The bug being tested is *"the same caller gains access by
+asserting a trusted-proxy header the edge should have stripped."*
+
+Every variant keeps the **caller's own credentials** (no identity swap — the
+caller stays themselves on the wire; they merely add a header a misconfigured
+backend trusts):
+
+```bash
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --header-injection
+```
+
+| Technique | What it sends |
+|-----------|---------------|
+| `client-ip-spoof:<header>` | A trusted-client-IP header (`X-Real-IP`, `X-Client-IP`, `X-Originating-IP`, `X-Remote-IP`, `X-Remote-Addr`) set to the loopback `127.0.0.1`. Apps that grant internal/admin access by trusting a proxy-supplied client IP (an "allow 127.0.0.1" / "internal network" rule) are fooled into treating the caller as originating inside the trust boundary. One variant per header for attribution. |
+| `trusted-identity:<header>` | A proxy-set identity-assertion header (`X-Authenticated-User`, `X-Remote-User`, `X-Forwarded-User`, `X-User`, `X-WEBAUTH-USER`) naming a privileged principal (`admin`). Auth proxies (mod_auth, oauth2-proxy, SSO gateways) authenticate the caller and forward the established identity to the backend in such a header; a backend that trusts it without re-verifying lets a client who sets the header directly assert an arbitrary identity. One variant per header for attribution. |
+
+The header set is deliberately **disjoint** from the headers `--forbidden-bypass`
+(`X-Forwarded-For`, `X-Original-URL`, `X-Rewrite-URL`) and `--host-header`
+(`Forwarded`, `X-Forwarded-Host`, `X-Forwarded-Server`, `X-HTTP-Host-Override`,
+`X-Host`) already inject — no double-coverage, clean per-mutator attribution.
+
+This is **not** CRLF / HTTP response-splitting: the injected values are
+well-formed header tokens (an IP, a username). `net/http` (and the replay engine
+built on it) rejects raw CR/LF in header values, so a response-splitting payload
+would never reach the wire and is intentionally out of scope. The technique here
+is trusting a *legitimately-shaped* header the edge failed to strip.
+
+Detection rides the **existing comparative ladder** unchanged: the caller's own
+baseline against the request without the injected header is the reference; a
+variant that gains owner-shaped access where the baseline did not is the bypass
+(class `authz-bypass`, ASVS V8.3.x). Like every mutator it is pure and
+deterministic — header names are constants emitted in sorted order — so
+`--dry-run` and the offline corpus cover it for free.
+
+`--header-injection` is **off by default**: the spoofed-trust variants actively
+assert internal-origin / privileged identity against the access-control layer, so
+it only fires when you opt in — mirroring the gating of `--cookie-tampering`,
+`--host-header`, `--forbidden-bypass`, `--method-override`, `--csrf-header`,
+`--ws-hijack`, `--xxe`, and `--mass-assign`.
+
 ## Role matrix
 
 The role matrix is YAML. Minimum viable shape:

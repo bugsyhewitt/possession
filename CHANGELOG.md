@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Trusted-header injection mutator** (`--header-injection`,
+  `internal/mutate/header_injection.go`): a new mutator in the access-control
+  bypass family. Where `--host-header` attacks *which host the access-control
+  layer trusts* and `--cookie-tampering` attacks *which authorization state the
+  app trusts inside a cookie*, `--header-injection` attacks *which trusted-proxy
+  assertion the backend believes about the caller* — the canonical "trusted
+  header" / "internal-header spoofing" family. A backend that trusts headers it
+  assumes a fronting proxy populated, but which are reachable from the untrusted
+  client edge, is fooled into vouching for a caller who sets them directly. Every
+  variant keeps the caller's own credentials (no identity swap — they merely add a
+  header a misconfigured backend trusts). Two technique families, each a separate
+  variant for attribution and emitted in deterministic sorted order:
+  client-ip-spoof (a trusted-client-IP header — `X-Real-IP`, `X-Client-IP`,
+  `X-Originating-IP`, `X-Remote-IP`, `X-Remote-Addr` — set to the loopback
+  `127.0.0.1` so an IP-gated internal/admin rule treats the caller as inside the
+  trust boundary) and trusted-identity (a proxy-set identity-assertion header —
+  `X-Authenticated-User`, `X-Remote-User`, `X-Forwarded-User`, `X-User`,
+  `X-WEBAUTH-USER` — naming a privileged principal so a backend that trusts a
+  forwarded identity grants elevated access). The header set is deliberately
+  disjoint from the headers `--forbidden-bypass` (`X-Forwarded-For`,
+  `X-Original-URL`, `X-Rewrite-URL`) and `--host-header` (`Forwarded`,
+  `X-Forwarded-Host`, `X-Forwarded-Server`, `X-HTTP-Host-Override`, `X-Host`)
+  already inject — no double-coverage, clean per-mutator attribution. This is
+  **not** CRLF / response-splitting: injected values are well-formed tokens and
+  `net/http` rejects raw CR/LF in header values, so splitting payloads are out of
+  scope. Detection rides the existing comparative ladder unchanged: a variant that
+  gains owner-shaped access where the caller's no-header baseline did not is the
+  bypass (class `authz-bypass`, ASVS V8.3.x). Pure and deterministic, so
+  `--dry-run` and the offline corpus cover it for free. **Off by default**: the
+  spoofed-trust variants actively assert internal-origin/privileged identity
+  against the access-control layer, mirroring the gating of `--cookie-tampering`,
+  `--host-header`, `--forbidden-bypass`, `--method-override`, `--csrf-header`,
+  `--ws-hijack`, `--xxe`, and `--mass-assign`. Registered (inert when disabled) so
+  the canonical `DefaultRegistry` order is unchanged.
+
 - **Cookie-value privilege-tampering mutator** (`--cookie-tampering`,
   `internal/mutate/cookie_tamper.go`): a new mutator in the access-control bypass
   family. Where `--drop-cookie` *removes* an auth cookie and `--strip-token`
