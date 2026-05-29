@@ -492,6 +492,45 @@ access-control probe, so it only fires when you opt in. A request with no CSRF
 header *and* no CSRF cookie yields a single `inject-missing-header` variant; a
 request with a CSRF header but no CSRF cookie yields no variants.
 
+## HTTP verb / method-override bypass (`--method-override`)
+
+Where `--forbidden-bypass` attacks *how the request path is matched* and
+`--csrf-header` attacks *the anti-CSRF token*, `--method-override` attacks *which
+HTTP verb the access-control layer evaluates* — the canonical "method bypass"
+family every 403/401-bypass cheat-sheet lists alongside path mutation. The bug
+being tested is *"the same rejected caller slips past the gate by changing the
+verb."* A fronting proxy / API gateway frequently gates a specific method (e.g.
+`deny DELETE /admin`, `allow GET only`) while the upstream framework is
+method-agnostic or honours a method-override header — so the protected handler
+runs under a verb the gateway never inspected.
+
+Every variant keeps the **caller's own credentials** (no identity swap):
+
+```bash
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --method-override
+```
+
+| Technique | What it sends |
+|-----------|---------------|
+| `header:X-HTTP-Method-Override` / `header:X-HTTP-Method` / `header:X-Method-Override` | Keeps the request-line verb unchanged but injects a method-override header naming a verb that **crosses the safe/unsafe boundary** (a safe GET/HEAD/OPTIONS request → `POST`; any write request → `GET`). Frameworks that honour the override header dispatch the overridden verb to the protected handler the gateway gated by request-line method. |
+| `verb-swap:<VERB>` | Changes the actual request-line method to a sibling verb the gateway may not gate while the handler still serves it — e.g. `GET` → `HEAD`/`OPTIONS`/`POST`, a write → `GET`/`PUT`/`PATCH`. The original verb is never re-emitted (no no-op swap). |
+| `case-toggle` | Flips the case of the verb (`GET` → `get`). A case-sensitive gateway matcher denies the differently-cased verb while a case-insensitive framework router still serves it. |
+
+Detection rides the **existing comparative ladder** unchanged: the caller's own
+baseline against the protected endpoint is (expected to be) a denial; a variant
+that returns an owner-shaped 2xx where the baseline was denied is the bypass
+(class `authz-bypass`, ASVS V8.3.x). Like every mutator it is pure and
+deterministic — verbs are constants and techniques are emitted in sorted order —
+so `--dry-run` and the offline corpus cover it for free.
+
+`--method-override` is **off by default**: the verb-swap variants re-issue
+requests under state-changing methods (POST/PUT/DELETE) and the override headers
+can reach mutating handlers, so it only fires when you opt in — mirroring the
+gating of `--forbidden-bypass`, `--csrf-header`, `--ws-hijack`, `--xxe`, and
+`--mass-assign`.
+
 ## Role matrix
 
 The role matrix is YAML. Minimum viable shape:

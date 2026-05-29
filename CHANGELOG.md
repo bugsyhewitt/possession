@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **HTTP verb / method-override bypass mutator** (`--method-override`,
+  `internal/mutate/method_override.go`): a new mutator in the access-control
+  bypass family. Where `--forbidden-bypass` attacks *how the request path is
+  matched* and `--csrf-header` attacks *the anti-CSRF token*,
+  `--method-override` attacks *which HTTP verb the access-control layer
+  evaluates* — the canonical "method bypass" technique. Every variant keeps the
+  caller's own credentials (no identity swap): the bug being tested is "the same
+  rejected caller slips past the gate by changing the verb." Three technique
+  families, each a separate variant for attribution and emitted in deterministic
+  sorted order: override-header (`X-HTTP-Method`, `X-HTTP-Method-Override`,
+  `X-Method-Override` — keep the request-line verb but inject a header naming a
+  verb that crosses the safe/unsafe boundary: a safe GET/HEAD/OPTIONS request is
+  overridden to POST, any write request to GET; frameworks that honour the
+  override header dispatch the overridden verb to the protected handler the
+  gateway gated by request-line method), verb-swap (change the actual
+  request-line method to a sibling verb the gateway may not gate while the
+  handler still serves it — GET ↔ HEAD/OPTIONS/POST, writes ↔ GET/PUT/PATCH; the
+  original verb is never re-emitted), and case-toggle (flip the verb case, GET →
+  get, to defeat a case-sensitive gateway matcher fronting a case-insensitive
+  router). Detection rides the existing comparative ladder unchanged: the
+  caller's own baseline against the protected endpoint is the denial; a variant
+  returning an owner-shaped 2xx where the baseline was denied is the bypass
+  (class `authz-bypass`, ASVS V8.3.x). Pure and deterministic (verbs are
+  constants), so `--dry-run` and the offline corpus cover it for free. **Off by
+  default**: verb-swap variants re-issue requests under state-changing methods
+  and the override headers can reach mutating handlers, mirroring the gating of
+  `--forbidden-bypass`, `--csrf-header`, `--ws-hijack`, `--xxe`, and
+  `--mass-assign`. Registered (inert when disabled) so the canonical
+  `DefaultRegistry` order is unchanged.
+
 - **Anti-CSRF token bypass mutator** (`--csrf-header`,
   `internal/mutate/csrf_header.go`): a new mutator that is the inverse of
   `strip-token`. Where `strip-token` *removes* the CSRF header to probe whether
