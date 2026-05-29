@@ -449,6 +449,49 @@ WebSocket channel under a foreign or stripped identity is an active
 access-control probe, so it only fires when you opt in. Requests that are not
 WebSocket upgrade handshakes produce no variants.
 
+## Anti-CSRF token bypass (`--csrf-header`)
+
+`strip-token` removes a request's CSRF header to probe whether the server even
+*depends* on it. `--csrf-header` does the inverse: it **forges or reflects** the
+anti-CSRF token to probe whether the server's CSRF validation can be satisfied
+with a value the caller controls. The bug being tested is the classic broken
+double-submit-cookie / presence-only-check family — *"the same caller submits a
+CSRF token the server should reject, and the request still succeeds."* A server
+that issues per-session tokens and validates them server-side rejects all of
+these; a server that merely checks `header == cookie`, *"a CSRF header is
+present and non-empty"*, or that the header reflects the cookie is vulnerable to
+cross-site request forgery.
+
+Every variant keeps the **caller's own credentials** (no identity swap, no
+token strip):
+
+```bash
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --csrf-header
+```
+
+| Technique | When it fires | What it sends |
+|-----------|---------------|---------------|
+| `forged-double-submit` | A CSRF **header and a CSRF cookie** are both present. | Overwrites *both* with one identical attacker-chosen value. A naive `header == cookie` check still passes. |
+| `reflect-cookie-to-header` | A CSRF **cookie** is present. | Copies the cookie's value verbatim into the CSRF header (the canonical `X-CSRF-Token` if no header exists). The textbook double-submit reflection an attacker who can plant the cookie abuses. |
+| `inject-missing-header` | **No CSRF header** is present. | Injects `X-CSRF-Token` with a forged value, testing presence-only enforcement (the server accepts any non-empty token). |
+
+A header- or cookie-name is recognised as CSRF-ish when it contains `csrf` or
+`xsrf` (case-insensitive), matching the same heuristic `strip-token` uses.
+
+Detection rides the **existing comparative ladder** unchanged: the caller's own
+baseline is the legitimate request with its real CSRF token; a variant that
+returns an owner-shaped 2xx with a forged or reflected token is the bypass
+(class `authz-bypass`, ASVS V8.3.x). Like every mutator it is pure and
+deterministic — the forged token is a constant and techniques are emitted in
+sorted order — so `--dry-run` and the offline corpus cover it for free.
+
+`--csrf-header` is **off by default**: forging an anti-CSRF token is an active
+access-control probe, so it only fires when you opt in. A request with no CSRF
+header *and* no CSRF cookie yields a single `inject-missing-header` variant; a
+request with a CSRF header but no CSRF cookie yields no variants.
+
 ## Role matrix
 
 The role matrix is YAML. Minimum viable shape:

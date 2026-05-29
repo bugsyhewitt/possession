@@ -27,7 +27,7 @@ func protectedScanReq() *model.CapturedRequest {
 // flows through buildRegistry: the mutator is always registered, but only
 // emits variants when the flag is set.
 func TestBuildRegistry_ForbiddenBypassGating(t *testing.T) {
-	regOff, err := buildRegistry("", 0, false, false, false, false, false, false)
+	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry off: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestBuildRegistry_ForbiddenBypassGating(t *testing.T) {
 		t.Fatalf("forbidden-bypass must always be registered, even when disabled")
 	}
 
-	regOn, err := buildRegistry("", 0, false, false, false, false, true, false)
+	regOn, err := buildRegistry("", 0, false, false, false, false, true, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry on: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestBuildRegistry_ForbiddenBypassWithWordlist(t *testing.T) {
 	if err := os.WriteFile(f, []byte("secret\n"), 0o644); err != nil {
 		t.Fatalf("write wordlist: %v", err)
 	}
-	reg, err := buildRegistry(f, 0, false, false, false, false, true, false)
+	reg, err := buildRegistry(f, 0, false, false, false, false, true, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry with wordlist: %v", err)
 	}
@@ -93,7 +93,7 @@ func wsScanReq() *model.CapturedRequest {
 // buildRegistry: the mutator is always registered, but only emits variants when
 // the flag is set.
 func TestBuildRegistry_WSHijackGating(t *testing.T) {
-	regOff, err := buildRegistry("", 0, false, false, false, false, false, false)
+	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry off: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestBuildRegistry_WSHijackGating(t *testing.T) {
 		t.Errorf("disabled ws-hijack emitted %d variants; want 0", len(vs))
 	}
 
-	regOn, err := buildRegistry("", 0, false, false, false, false, false, true)
+	regOn, err := buildRegistry("", 0, false, false, false, false, false, true, false)
 	if err != nil {
 		t.Fatalf("buildRegistry on: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestBuildRegistry_WSHijackWithWordlist(t *testing.T) {
 	if err := os.WriteFile(f, []byte("secret\n"), 0o644); err != nil {
 		t.Fatalf("write wordlist: %v", err)
 	}
-	reg, err := buildRegistry(f, 0, false, false, false, false, false, true)
+	reg, err := buildRegistry(f, 0, false, false, false, false, false, true, false)
 	if err != nil {
 		t.Fatalf("buildRegistry with wordlist: %v", err)
 	}

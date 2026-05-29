@@ -341,7 +341,7 @@ func MutatorClass(mutatorType string) string {
 		return "authn-bypass"
 	case "swap-identity", "swap-object":
 		return "idor"
-	case "forbidden-bypass":
+	case "forbidden-bypass", "csrf-header":
 		return "authz-bypass"
 	case "downgrade-role", "mass-assign":
 		return "privesc"
