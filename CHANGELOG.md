@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Mass-assignment / BOPLA mutator** (`--mass-assign`,
+  `internal/mutate/mass_assign.go`): a new mutator that completes the third axis
+  of an authorization test. Where `swap-identity` attacks *who* the caller is and
+  `swap-object` attacks *which object* is referenced, `mass-assign` attacks
+  *which properties* the caller may set — Broken Object Property Level
+  Authorization (OWASP API #3, "mass assignment" / over-posting). For every
+  captured request carrying a JSON **object** body, it keeps the caller's own
+  credentials and emits one variant per privileged property (`admin`, `is_admin`,
+  `isAdmin`, `role:admin`, `roles:[admin]`, `verified`), *adding* a field the
+  client should not be permitted to set. A property the request already sets is
+  skipped (case-insensitive). Pure and deterministic like every mutator
+  (properties applied in sorted order, object keys re-marshalled sorted), so
+  `--dry-run` and the offline corpus cover it for free. Findings are class
+  `privesc`, severity HIGH — a 2xx whose body reflects the smuggled property
+  means the server bound an attacker-controlled field onto its model. Off by
+  default because the variants are write-shaped and mutate server state; requests
+  without a JSON object body (GET, form-encoded, JSON arrays, empty bodies)
+  produce no variants. Registered (inert when disabled) in `buildRegistry`, kept
+  out of `DefaultRegistry` like the other gated mutators. (POST_V01 candidate:
+  mass-assignment parameter pollution.)
 - **Statistical retry** (`--retry-inconclusive`, `internal/replay/retry.go`): a
   scan can now re-issue each transiently-failed variant exactly once before
   detection runs, so a flaky target's one-off failures stop masquerading as

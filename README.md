@@ -231,6 +231,43 @@ replaying real ones, so it is opt-in. No external JWT library is used — the
 tokens are constructed by base64url-decoding the captured header/payload,
 re-encoding, and (for blank-secret) HMAC-signing with `""`.
 
+## Mass-assignment / BOPLA (`--mass-assign`)
+
+`swap-identity` attacks *who* the caller is and `swap-object` attacks *which
+object* the caller references. The `--mass-assign` flag attacks *which
+properties* the caller is allowed to set — Broken Object Property Level
+Authorization (OWASP API #3, the "mass assignment" / over-posting bug):
+
+```bash
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --mass-assign
+```
+
+For every captured request that carries a JSON **object** body, it keeps the
+caller's own credentials untouched and emits one variant per privileged
+property, *adding* a field the client should not be permitted to set:
+
+| Injected field | Value     |
+|----------------|-----------|
+| `admin`        | `true`    |
+| `is_admin`     | `true`    |
+| `isAdmin`      | `true`    |
+| `role`         | `"admin"` |
+| `roles`        | `["admin"]` |
+| `verified`     | `true`    |
+
+A property the request already sets is skipped (case-insensitive) — injecting
+it would prove nothing. Findings are class `privesc`, severity **HIGH**: a 2xx
+whose body reflects the smuggled property (e.g. the response now shows
+`"role":"admin"`) means the server bound an attacker-controlled field onto its
+model.
+
+`--mass-assign` is **off by default**: unlike the read-shaped identity/object
+swaps, these variants are write-shaped (they ride POST/PUT/PATCH) and mutate
+server state, so they only fire when you opt in. Requests without a JSON object
+body (GET, form-encoded, JSON arrays, empty bodies) produce no variants.
+
 ## Role matrix
 
 The role matrix is YAML. Minimum viable shape:
