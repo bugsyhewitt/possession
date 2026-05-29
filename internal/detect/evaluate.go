@@ -163,6 +163,31 @@ func (ev ComparativeEvaluator) judge(vr VariantResponse, owner *model.Identity, 
 		}
 	}
 
+	// GraphQL introspection branch (R19): a --graphql variant sends the
+	// canonical introspection query carrying
+	// Mutation.Detail["graphql-signal"] == "introspection". If the response
+	// body reflects the introspection schema markers (__schema / queryType /
+	// __type), the server answered the introspection query ⇒ schema
+	// introspection is enabled (information disclosure). Those markers are
+	// GraphQL-internal type-system identifiers that only appear when the schema
+	// is walked, so the signal is decisive and short-circuits the comparative
+	// ladder — introspection has no owner/actor baseline. The malformed-query
+	// technique carries no introspection signal and falls through to the
+	// normal ladder, where a verbose-error body diff surfaces it.
+	if v != nil && v.Mutation.Detail["graphql-signal"] == "introspection" {
+		var rawBody []byte
+		if r != nil {
+			rawBody = r.Body
+		}
+		if graphqlIntrospectionReflected(rawBody) {
+			vv.Verdict = VerdictBypass
+			vv.Confidence = GraphQLIntrospectionConfidence
+			vv.Notes = append(vv.Notes,
+				"graphql-introspection: response reflects introspection schema markers (__schema/queryType/__type) ⇒ GraphQL introspection is enabled (schema disclosure)")
+			return vv
+		}
+	}
+
 	// Now we need the variant's normalized body for similarity/signature.
 	variantCT := ""
 	if r != nil && r.Headers != nil {
@@ -282,4 +307,24 @@ func identityOf(v *model.Variant) *model.Identity {
 		return nil
 	}
 	return v.Identity
+}
+
+// graphqlIntrospectionReflected reports whether body looks like a successful
+// GraphQL introspection response. A real introspection answer nests the
+// schema root marker "__schema" together with the "queryType" descriptor it
+// always contains; requiring BOTH (rather than either alone) keeps the signal
+// decisive — a server that merely mentions "__schema" in an error string, or
+// echoes the query, won't carry both markers in the structural positions a
+// real result does. We also accept the "__type" marker as a corroborating
+// alternative when "queryType" is absent (some servers answer a partial
+// introspection). The check is case-sensitive: GraphQL introspection field
+// names are fixed identifiers.
+func graphqlIntrospectionReflected(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	if !bytes.Contains(body, []byte("__schema")) {
+		return false
+	}
+	return bytes.Contains(body, []byte("queryType")) || bytes.Contains(body, []byte("__type"))
 }

@@ -302,6 +302,39 @@ resolution, so it only fires when you opt in. Non-XML bodies (JSON,
 form-encoded, empty) and documents with only a self-closing root produce no
 variants.
 
+## GraphQL exposure (`--graphql`)
+
+Where `--xxe` attacks *how an XML body is parsed*, `--graphql` attacks *what the
+GraphQL layer exposes*. For endpoints that accept **GraphQL** POST bodies, it
+runs the two highest-signal recon probes a hunter checks first, keeping the
+caller's own credentials untouched:
+
+```bash
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --graphql
+```
+
+A request is recognized as GraphQL when its `Content-Type` is
+`application/graphql`, or when its JSON body carries a top-level `query` (or
+`mutation`) string field. For each such request it emits one variant per
+technique:
+
+| Technique       | Probe                                                                 | Detection |
+|-----------------|-----------------------------------------------------------------------|-----------|
+| `introspection` | Replaces the operation with the canonical introspection query (`{ __schema { queryType … } }`). | If the response reflects the introspection schema markers (`__schema` **and** `queryType`/`__type`), the server answered introspection ⇒ **schema introspection is enabled** (information disclosure). Decisive, sits **outside the comparative ladder** (class `graphql-exposure`, severity **MEDIUM**, near-certain confidence). |
+| `malformed`     | Sends a deliberately invalid GraphQL document.                        | No canary; judged by the comparative differential — a verbose error response (field suggestions, type hints, stack traces) that diverges from the owner baseline surfaces verbose-error leakage. |
+
+The JSON transport is re-encoded to a minimal `{"query": …}` envelope (stale
+`operationName`/`variables` referencing the old operation are dropped); the raw
+`application/graphql` transport sends the probe document verbatim.
+
+`--graphql` is **off by default**: although the probes are read-shaped (they
+never run an operation you authored), they are still active reconnaissance
+against the GraphQL layer, so they only fire when you opt in. Non-GraphQL
+bodies (plain JSON without a `query` field, form-encoded, XML, empty) produce
+no variants.
+
 ## Role matrix
 
 The role matrix is YAML. Minimum viable shape:
