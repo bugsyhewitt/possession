@@ -52,8 +52,12 @@ Items deliberately left out of v1.0 to keep the scope bounded:
 - Distinguish "denied" from "different resource" at the low-similarity
   end of the ladder (current v1.0 limitation, see branch 10 of
   `internal/detect/evaluate.go`).
-- Statistical retry: re-issue inconclusive variants once before
-  reporting.
+- ~~Statistical retry: re-issue inconclusive variants once before
+  reporting.~~ **Shipped** (`--retry-inconclusive`): re-issues each
+  transiently-failed variant (transport error / 429 / 5xx) exactly once
+  before detection; a recovered retry replaces the failure, a still-failing
+  one preserves the original. Refresh/flow setup failures are not retried.
+  Off by default, rate-sensitive; mutually exclusive with `--replay`.
 
 ### JWT (deeper attacks)
 - RS256→HS256 alg-confusion (sign attacker key with server's public

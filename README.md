@@ -541,6 +541,40 @@ detection exactly the same inputs as an uninterrupted run.
 there is nothing to resume). Combine `--resume` with `--record` to keep both a
 crash-safe checkpoint and a final replayable recording.
 
+## Statistical retry (`--retry-inconclusive`)
+
+Real targets are flaky. A momentary 500, a single connection reset, or a brief
+429 squall turns a variant into an `inconclusive` verdict — and an inconclusive
+variant is a finding you never got to see. `--retry-inconclusive` re-issues each
+transiently-failed variant **exactly once** after the main pass, before
+detection runs, so a one-off failure stops masquerading as "we couldn't tell."
+
+```bash
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --retry-inconclusive
+```
+
+A variant is re-issued when its response is a transport error, a `429`, or any
+`5xx`. The retry goes through the same rate limiter, concurrency, refresh
+injections, and body caps as the original request. If the retry succeeds, its
+response replaces the failure; if it fails again, the original is preserved — a
+flaky target can never make a result *worse* than the first attempt.
+
+Refresh- and flow-setup failures are deliberately **not** retried: those are
+per-identity setup failures that one variant re-issue cannot repair, so they
+stay inconclusive rather than burning another request for nothing.
+
+| Flag                   | Behaviour                                                                          |
+|------------------------|------------------------------------------------------------------------------------|
+| `--retry-inconclusive` | Re-issue each transiently-failed variant (transport error / 429 / 5xx) once before detection |
+
+`--retry-inconclusive` has no effect under `--replay` (which fires no requests)
+and the two are mutually exclusive. It composes with `--resume` and `--record`:
+a recovered retry is checkpointed and recorded in place of the failure. The flag
+costs extra requests against an already-struggling target, so it is off by
+default and rate-sensitive — pair it with a conservative `--rate`.
+
 ## What ships in v1.0
 
 - 9 mutators total: 5 classic (`strip-auth`, `swap-identity`,

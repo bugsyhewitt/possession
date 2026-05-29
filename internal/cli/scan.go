@@ -53,6 +53,7 @@ var (
 	scanRecord          string // --record <dir>: persist every variant+baseline response to disk (off by default)
 	scanReplay          string // --replay <dir>: re-run detection over a saved recording, firing no requests (off by default)
 	scanResume          string // --resume <dir>: checkpoint responses incrementally; on re-run, skip already-completed variants (off by default)
+	scanRetry           bool   // --retry-inconclusive: re-issue transiently-failed variants once before detection (off by default)
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -110,6 +111,8 @@ func init() {
 		"re-run detection over a recording previously written by --record <dir>; fires NO network requests, letting you tune thresholds/evaluators against a target you only had permission to hit once (mutually exclusive with --record)")
 	scanCmd.Flags().StringVar(&scanResume, "resume", "",
 		"checkpoint every completed response to <dir>/checkpoint.jsonl as the scan runs; on a re-run with the same --resume <dir>, already-completed variants are skipped and only the remaining requests are fired (survives Ctrl-C, network drops, and quota walls; mutually exclusive with --replay)")
+	scanCmd.Flags().BoolVar(&scanRetry, "retry-inconclusive", false,
+		"re-issue each variant that failed transiently (transport error, 429, or 5xx) exactly once before detection; a flaky target's one-off failures stop masquerading as inconclusive verdicts (refresh/flow failures are NOT retried; rate-sensitive, costs extra requests; no effect under --replay)")
 }
 
 func resetScanFlags() {
@@ -138,6 +141,7 @@ func resetScanFlags() {
 	scanRecord = ""
 	scanReplay = ""
 	scanResume = ""
+	scanRetry = false
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -158,6 +162,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 	if scanResume != "" && scanReplay != "" {
 		return fmt.Errorf("scan: --resume and --replay are mutually exclusive (replay fires no requests, so there is nothing to resume)")
+	}
+	if scanRetry && scanReplay != "" {
+		return fmt.Errorf("scan: --retry-inconclusive and --replay are mutually exclusive (replay fires no requests, so there is nothing to retry)")
 	}
 	input := args[0]
 
@@ -342,6 +349,26 @@ func runScan(cmd *cobra.Command, args []string) error {
 		} else {
 			baselineResponses = engine.Run(ctx, baselinePlan)
 			responses = engine.Run(ctx, plan)
+		}
+
+		// --retry-inconclusive: re-issue each variant that failed transiently
+		// (transport error, 429, or 5xx) exactly once. A flaky target's one-off
+		// failures otherwise land as inconclusive verdicts, masking real
+		// findings; a single retry recovers most of them. Refresh/flow failures
+		// are deliberately not retried (a per-identity setup failure a single
+		// variant retry cannot repair). Runs only on a live scan (never under
+		// --replay) and feeds improved responses to --resume/--record via the
+		// engine's OnResponse hook. (ROADMAP v1.1 "statistical retry".)
+		if scanRetry {
+			var retried, improved int
+			responses, retried, improved = engine.RetryInconclusive(ctx, plan, responses)
+			if retried > 0 {
+				fmt.Fprintf(stderr,
+					"--retry-inconclusive: re-issued %d transiently-failed variant(s); %d now produced a usable response\n",
+					retried, improved)
+			} else {
+				fmt.Fprintln(stderr, "--retry-inconclusive: no transiently-failed variants to retry")
+			}
 		}
 	}
 	end := time.Now()
