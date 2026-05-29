@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Cookie-value privilege-tampering mutator** (`--cookie-tampering`,
+  `internal/mutate/cookie_tamper.go`): a new mutator in the access-control bypass
+  family. Where `--drop-cookie` *removes* an auth cookie and `--strip-token`
+  strips the bearer/CSRF side of the credential pair, `--cookie-tampering` keeps
+  every cookie present and instead **flips one privilege claim inside an auth
+  cookie's value** from its unprivileged to its privileged form — the classic
+  broken-access-control pattern where the server trusts unsigned authorization
+  state it stored in a cookie (`role=user`, `admin=0`, `is_admin=false`). Every
+  variant keeps the caller's own credentials (no identity swap). Two technique
+  families, each a separate variant for attribution and emitted in deterministic
+  sorted order: value-claim-flip (rewrite a delimited plaintext claim in place —
+  `role=user`→`role=admin`, `admin=0`→`admin=1` — token-bounded so `role=username`
+  is left alone, and case-insensitive while preserving the original key casing)
+  and base64-claim-flip (decode a base64-wrapped value under std/URL, padded or
+  raw, flip the inner claim, and re-encode in the same alphabet/padding;
+  JWT-shaped values are left to the JWT mutators). The built-in claim set
+  (`role`, `admin`, `is_admin`, `isadmin`, `verified`) parallels `--mass-assign`'s
+  privileged-property set; non-printable/encrypted blobs and values with no
+  matching claim emit nothing. Detection rides the existing comparative ladder
+  unchanged: a variant that gains elevated/owner-shaped access where the caller's
+  untampered-cookie baseline did not is the bypass (class `authz-bypass`, ASVS
+  V8.3.x). Pure and deterministic, so `--dry-run` and the offline corpus cover it
+  for free. **Off by default**: the flipped-claim variants actively assert
+  elevated privilege against the access-control layer, mirroring the gating of
+  `--host-header`, `--forbidden-bypass`, `--method-override`, `--csrf-header`,
+  `--ws-hijack`, `--xxe`, and `--mass-assign`. Registered (inert when disabled) so
+  the canonical `DefaultRegistry` order is unchanged.
+
 - **Host-header bypass mutator** (`--host-header`,
   `internal/mutate/host_header.go`): a new mutator in the access-control bypass
   family. Where `--forbidden-bypass` attacks *how the request path is matched*
