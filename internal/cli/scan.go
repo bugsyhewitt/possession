@@ -64,6 +64,7 @@ var (
 	scanHostHeader      bool   // --host-header: override the Host + inject forwarded-host headers to reach a host-gated resource (off by default)
 	scanCookieTamper    bool   // --cookie-tampering: flip a client-controllable privilege claim inside an auth cookie value (plaintext or base64) using the caller's own credentials (off by default)
 	scanHeaderInject    bool   // --header-injection: inject trusted-proxy headers (client-IP / identity assertions) the backend mis-trusts, using the caller's own credentials (off by default)
+	scanParamPollution  bool   // --parameter-pollution: duplicate query/form parameters (HPP) to exploit cross-layer parsing disagreement for access-control bypass, using the caller's own credentials (off by default)
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -143,6 +144,8 @@ func init() {
 		"test cookie-trusting privilege escalation using the caller's own credentials: flip a client-controllable authorization claim inside an auth cookie value from its unprivileged to its privileged form (role=user→admin, admin=0→1, is_admin=false→true, verified=false→true), in both plaintext delimited values and base64-wrapped (std/url, padded/raw) values that decode to a printable claim; a request that gains elevated privilege after a one-claim flip is trusting unsigned cookie state for authorization; JWT-shaped cookie values are left to the JWT mutators; off by default because the flipped-claim variants actively assert elevated privilege against the access-control layer")
 	scanCmd.Flags().BoolVar(&scanHeaderInject, "header-injection", false,
 		"test trusted-proxy header access-control bypass using the caller's own credentials: inject a trusted-client-IP header (X-Real-IP, X-Client-IP, X-Originating-IP, X-Remote-IP, X-Remote-Addr) set to the loopback so an IP-gated internal/admin rule treats the caller as inside the trust boundary, and inject a proxy-set identity-assertion header (X-Authenticated-User, X-Remote-User, X-Forwarded-User, X-User, X-WEBAUTH-USER) naming a privileged principal so a backend that trusts a forwarded identity grants elevated access; a request that succeeds under an injected trusted header where the baseline did not is a header-injection authorization bypass; disjoint from the headers --forbidden-bypass and --host-header inject; not CRLF/response-splitting (values are well-formed tokens); off by default because the spoofed-trust variants actively assert internal-origin/privileged identity against the access-control layer")
+	scanCmd.Flags().BoolVar(&scanParamPollution, "parameter-pollution", false,
+		"test HTTP Parameter Pollution (HPP) access-control bypass using the caller's own credentials: for each query parameter, and each application/x-www-form-urlencoded body parameter, emit a duplicate occurrence carrying an attacker-chosen value — once appended after the original (last-wins parsers: PHP, ASP.NET) and once prepended before it (first-wins parsers: some Java stacks) — while always preserving the original occurrence so a fronting gate that reads the expected value still passes; a request that succeeds with the polluted value where the original was denied means a WAF/gateway and the application framework disagree on which occurrence is authoritative; disjoint from --swap-object (which replaces, not duplicates, a value); off by default because the polluted variants re-issue requests with altered parameter values that can reach mutating handlers")
 }
 
 func resetScanFlags() {
@@ -182,6 +185,7 @@ func resetScanFlags() {
 	scanHostHeader = false
 	scanCookieTamper = false
 	scanHeaderInject = false
+	scanParamPollution = false
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -305,7 +309,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// derived from its representative sample's auth components.
 	attributionWarnings := attributeEndpoints(endpoints, matrix)
 
-	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate, scanJWTAttack, scanMassAssign, scanXXE, scanGraphQL, scanForbidBypass, scanWSHijack, scanCSRFHeader, scanMethodOverride, scanHostHeader, scanCookieTamper, scanHeaderInject)
+	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate, scanJWTAttack, scanMassAssign, scanXXE, scanGraphQL, scanForbidBypass, scanWSHijack, scanCSRFHeader, scanMethodOverride, scanHostHeader, scanCookieTamper, scanHeaderInject, scanParamPollution)
 	if err != nil {
 		return err
 	}
@@ -1221,12 +1225,13 @@ func buildEvaluator(name string, matrix *model.RoleMatrix) (detect.Evaluator, er
 // enabling the HostHeader (--host-header) mutator when hostHeader is true,
 // enabling the CookieTamper (--cookie-tampering) mutator when cookieTamper is
 // true, and enabling the HeaderInjection (--header-injection) mutator when
-// headerInjection is true.
+// headerInjection is true, and enabling the ParamPollution
+// (--parameter-pollution) mutator when paramPollution is true.
 // EnumerateID, JWTAuth, MassAssign, XXE, GraphQL, ForbiddenBypass, WSHijack,
-// CSRFHeader, MethodOverride, HostHeader, CookieTamper, and HeaderInjection are
-// always registered but inert in their disabled state, so the canonical
-// DefaultRegistry order (and the order test) stays unchanged.
-func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, xxe, graphql, forbidBypass, wsHijack, csrfHeader, methodOverride, hostHeader, cookieTamper, headerInjection bool) (*mutate.Registry, error) {
+// CSRFHeader, MethodOverride, HostHeader, CookieTamper, HeaderInjection, and
+// ParamPollution are always registered but inert in their disabled state, so
+// the canonical DefaultRegistry order (and the order test) stays unchanged.
+func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, xxe, graphql, forbidBypass, wsHijack, csrfHeader, methodOverride, hostHeader, cookieTamper, headerInjection, paramPollution bool) (*mutate.Registry, error) {
 	enumMutator := mutate.EnumerateID{N: enumerateN}
 	jwtAuthMutator := mutate.JWTAuth{Enabled: jwtAttack}
 	massAssignMutator := mutate.MassAssign{Enabled: massAssign}
@@ -1239,14 +1244,15 @@ func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, x
 	hostHeaderMutator := mutate.HostHeader{Enabled: hostHeader}
 	cookieTamperMutator := mutate.CookieTamper{Enabled: cookieTamper}
 	headerInjectionMutator := mutate.HeaderInjection{Enabled: headerInjection}
+	paramPollutionMutator := mutate.ParamPollution{Enabled: paramPollution}
 
 	if wordlistPath == "" {
 		// Extend the default registry with EnumerateID + JWTAuth +
 		// MassAssign + XXE + GraphQL + ForbiddenBypass + WSHijack + CSRFHeader +
-		// MethodOverride + HostHeader + CookieTamper + HeaderInjection (all no-op
-		// when disabled).
+		// MethodOverride + HostHeader + CookieTamper + HeaderInjection +
+		// ParamPollution (all no-op when disabled).
 		base := mutate.DefaultRegistry()
-		all := append(base.All(), enumMutator, jwtAuthMutator, massAssignMutator, xxeMutator, graphqlMutator, forbidMutator, wsHijackMutator, csrfHeaderMutator, methodOverrideMutator, hostHeaderMutator, cookieTamperMutator, headerInjectionMutator)
+		all := append(base.All(), enumMutator, jwtAuthMutator, massAssignMutator, xxeMutator, graphqlMutator, forbidMutator, wsHijackMutator, csrfHeaderMutator, methodOverrideMutator, hostHeaderMutator, cookieTamperMutator, headerInjectionMutator, paramPollutionMutator)
 		return mutate.NewRegistry(all...), nil
 	}
 	data, err := os.ReadFile(wordlistPath)
@@ -1285,6 +1291,7 @@ func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, x
 		hostHeaderMutator,
 		cookieTamperMutator,
 		headerInjectionMutator,
+		paramPollutionMutator,
 	), nil
 }
 
