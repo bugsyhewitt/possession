@@ -531,6 +531,45 @@ can reach mutating handlers, so it only fires when you opt in — mirroring the
 gating of `--forbidden-bypass`, `--csrf-header`, `--ws-hijack`, `--xxe`, and
 `--mass-assign`.
 
+## Host-header bypass (`--host-header`)
+
+Where `--forbidden-bypass` attacks *how the request path is matched* and
+`--method-override` attacks *which verb is evaluated*, `--host-header` attacks
+*which host the access-control layer believes the request targets* — the
+canonical "host-header injection" family. Many deployments route or authorize
+from the `Host` (or a forwarded-host header a fronting proxy trusts):
+virtual-host routing maps a host to an internal app, an API gateway gates an
+`internal`/admin vhost behind a network ACL while serving the public host, a
+reverse proxy forwards the client-supplied host straight to the backend, or an
+app builds links / cache keys from the host. The bug being tested is *"the same
+caller reaches a host-gated resource by lying about the host."*
+
+Every variant keeps the **caller's own credentials** (no identity swap):
+
+```bash
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --host-header
+```
+
+| Technique | What it sends |
+|-----------|---------------|
+| `host-override:<name>` | Replaces the **wire `Host`** with a spoofed value (`127.0.0.1`, `localhost`, `internal`) to reach an internal/loopback virtual host. possession promotes the spoofed `Host` onto the request's wire host (net/http otherwise ignores a `Host` entry in the header map). A no-op (spoof == the request's own host) is skipped. |
+| `forwarded-host:<HEADER>` | Keeps the real `Host` on the request line and injects a forwarded-host override header — `X-Forwarded-Host`, `X-Host`, `X-Forwarded-Server`, `X-HTTP-Host-Override`, or RFC 7239 `Forwarded: host=…`. A proxy/framework that trusts the forwarded host for routing, link generation, or cache keys is fooled into treating the request as targeting the spoofed host. These complement `--forbidden-bypass`'s rewrite headers (`X-Original-URL`, `X-Rewrite-URL`, `X-Forwarded-For`), which spoof the *URL* and *client IP* but never the *host*. |
+
+Detection rides the **existing comparative ladder** unchanged: the caller's own
+baseline against the public host is the reference; a variant that returns an
+owner-shaped 2xx where the baseline did not, under a spoofed host, is the bypass
+(class `authz-bypass`, ASVS V8.3.x). Like every mutator it is pure and
+deterministic — host values are constants and techniques are emitted in sorted
+order — so `--dry-run` and the offline corpus cover it for free.
+
+`--host-header` is **off by default**: the spoofed-host variants actively probe
+the routing layer and can reach internal-only virtual hosts on a misconfigured
+proxy, so it only fires when you opt in — mirroring the gating of
+`--forbidden-bypass`, `--method-override`, `--csrf-header`, `--ws-hijack`,
+`--xxe`, and `--mass-assign`.
+
 ## Role matrix
 
 The role matrix is YAML. Minimum viable shape:
