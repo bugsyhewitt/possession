@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Content-Type confusion mutator** (`--content-type-confusion`,
+  `internal/mutate/content_type_confusion.go`): a new mutator in the
+  access-control bypass family. Where `--parameter-pollution` attacks *which
+  copy of a duplicated parameter each layer reads*, `--host-header` attacks
+  *which host the access-control layer believes the request targets*, and
+  `--xxe` attacks *how the XML parser resolves entities*,
+  `--content-type-confusion` attacks *which body parser each layer of the
+  stack chooses* — the canonical Content-Type confusion / parser-sniffing
+  family. The body bytes are kept byte-identical; only the `Content-Type`
+  header is mutated. The bug being tested: a fronting WAF / API gateway
+  short-circuits its body-inspection rules ("this is text/plain, no JSON to
+  validate") while the application handler still parses the body as JSON, or
+  the handler is wired to multiple parsers (JSON ↔ XML ↔ form) with different
+  authz middleware and is coerced onto the alternate path. Every variant
+  keeps the caller's own credentials (no identity swap — they merely
+  relabel the body the handler will parse). Three technique sets, one per
+  body shape, emitted in deterministic sorted order: JSON-shaped bodies
+  (declared `*json*` or sniffed `{`/`[`) fan out to `as-form`
+  (`application/x-www-form-urlencoded`), `as-text` (`text/plain`),
+  `as-xml` (`application/xml`), and `strip-type` (drop the `Content-Type`
+  header entirely so the receiver must sniff); XML-shaped bodies (declared
+  `*xml*` or sniffed `<?xml` / a leading tag) emit `as-json` and `as-text`;
+  urlencoded form bodies emit only `as-json` (the highest-signal mismatch;
+  urlencoded bodies are hard to sniff so the technique set is deliberately
+  narrow). The media-type comparison is parameter-insensitive
+  (`application/json; charset=utf-8` and `application/json` compare equal)
+  so a no-op relabel (declared type already matches target) is skipped —
+  the comparative ladder must see a real probe, never a byte-identical
+  baseline. Binary, multipart, and empty bodies produce no variants.
+  Detection rides the existing comparative ladder unchanged: a variant that
+  returns an owner-shaped 2xx where the caller's honest-Content-Type
+  baseline did not is the bypass (class `authz-bypass`, ASVS V8.3.x). Pure
+  and deterministic — body-shape classification is a fixed heuristic and
+  techniques emit in sorted order — so `--dry-run` and the offline corpus
+  cover it for free. **Off by default**: the relabelled variants reach
+  alternate-parser code paths with weaker validation, so it only fires when
+  the operator opts in, mirroring the gating of `--origin-spoof`,
+  `--parameter-pollution`, `--header-injection`, `--cookie-tampering`,
+  `--host-header`, `--forbidden-bypass`, `--method-override`,
+  `--csrf-header`, `--ws-hijack`, `--xxe`, and `--mass-assign`. Registered
+  (inert when disabled) so the canonical `DefaultRegistry` order is
+  unchanged.
 - **Origin/Referer spoofing mutator** (`--origin-spoof`,
   `internal/mutate/origin_spoof.go`): a new mutator in the access-control
   bypass family. Where `--csrf-header` attacks *the anti-CSRF token*,

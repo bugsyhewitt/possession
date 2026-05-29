@@ -777,6 +777,55 @@ gating of `--parameter-pollution`, `--header-injection`, `--cookie-tampering`,
 `--host-header`, `--forbidden-bypass`, `--method-override`, `--csrf-header`,
 `--ws-hijack`, `--xxe`, and `--mass-assign`.
 
+## Content-Type confusion (`--content-type-confusion`)
+
+Where `--parameter-pollution` attacks *which copy of a duplicated parameter
+each layer reads*, `--host-header` attacks *which host the access-control
+layer believes the request targets*, and `--xxe` attacks *how the XML parser
+resolves entities*, `--content-type-confusion` attacks *which body parser
+each layer of the stack chooses* — the canonical Content-Type confusion /
+parser-sniffing family. The body bytes are kept byte-identical; only the
+`Content-Type` header is mutated. The bug being tested: a fronting WAF / API
+gateway short-circuits its body-inspection rules ("this is text/plain, no
+JSON to validate") while the handler still parses the body as JSON, or the
+handler is wired to multiple parsers (JSON ↔ XML ↔ form) with different
+authz middleware and is coerced onto the alternate path:
+
+```
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --content-type-confusion
+```
+
+Three technique sets, one per body shape (deterministic sorted order):
+
+- **JSON body** (declared `*json*` or sniffed `{`/`[`) — four variants:
+  `as-form` (`application/x-www-form-urlencoded`), `as-text` (`text/plain`),
+  `as-xml` (`application/xml`), and `strip-type` (drop the
+  `Content-Type` header entirely so the receiver must sniff).
+- **XML body** (declared `*xml*` or sniffed `<?xml` / leading tag) — two
+  variants: `as-json` and `as-text`.
+- **urlencoded form body** (declared `*x-www-form-urlencoded*`) — one
+  variant: `as-json` (the highest-signal mismatch; urlencoded bodies are
+  hard to sniff so the technique set is deliberately narrow).
+
+Every variant keeps the caller's own credentials (`Identity == nil`) — this
+is NOT an identity swap, the same caller's same body slips past the gate by
+claiming a different format. No-op relabels (declared type already matches
+the target) are skipped so the comparative ladder sees a real probe, not a
+byte-identical baseline. The media-type comparison is parameter-insensitive,
+so `application/json; charset=utf-8` and `application/json` compare equal.
+Binary, multipart, and empty bodies produce no variants. Findings are class
+`authz-bypass` (ASVS V8.3.x, severity HIGH).
+
+`--content-type-confusion` is **off by default**: the relabelled variants
+re-issue the request and can reach alternate-parser code paths with weaker
+validation, so it only fires when you opt in — mirroring the gating of
+`--origin-spoof`, `--parameter-pollution`, `--header-injection`,
+`--cookie-tampering`, `--host-header`, `--forbidden-bypass`,
+`--method-override`, `--csrf-header`, `--ws-hijack`, `--xxe`, and
+`--mass-assign`.
+
 ## Role matrix
 
 The role matrix is YAML. Minimum viable shape:
