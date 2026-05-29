@@ -66,6 +66,15 @@ const (
 	// identity's own data, which is correct behaviour.
 	ReflectedActorConfidence = 0.10
 
+	// XXECanaryConfidence is the (near-certain) confidence for an XXE
+	// finding confirmed by canary reflection: the variant injected an
+	// internal entity whose value is a unique canary string, and the
+	// response body contains that canary verbatim. The parser MUST have
+	// expanded the entity for this to happen, so the signal is decisive and
+	// false-positive-free — the canary is unique per endpoint and never
+	// appears in a non-expanding parser's response.
+	XXECanaryConfidence = 0.97
+
 	// AmbiguousPenalty multiplies the final confidence when the
 	// underlying status was 3xx (ambiguous). 3xx responses get the
 	// benefit of doubt but not full credit.
@@ -256,6 +265,7 @@ var ASVSByClass = map[string][]string{
 	"idor-cross-tenant": {"v5.0.0-8.4.1", "v5.0.0-8.2.2"},
 	"privesc":           {"v5.0.0-8.2.1"},
 	"auth-dependency":   {"v5.0.0-8.3.1"},
+	"xxe-injection":     {"v5.0.0-13.4.1"},
 }
 
 // SeverityByClass is the BASE severity for `bypass` verdicts. `suspected`
@@ -266,6 +276,7 @@ var SeverityByClass = map[string]string{
 	"idor-cross-tenant": "critical",
 	"privesc":           "high",
 	"auth-dependency":   "low",
+	"xxe-injection":     "high",
 }
 
 // SeverityOverrideByMutator pins a fixed base severity for specific
@@ -311,6 +322,8 @@ func MutatorClass(mutatorType string) string {
 		return "idor"
 	case "downgrade-role", "mass-assign":
 		return "privesc"
+	case "xxe":
+		return "xxe-injection"
 	case "drop-cookie", "strip-token":
 		return "auth-dependency"
 	case "jwt-alg-none", "jwt-sig-strip", "jwt-resign-weak-key":
