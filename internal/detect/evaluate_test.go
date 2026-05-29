@@ -47,9 +47,9 @@ func runLadder(t *testing.T, cal CalibrationResult, owner *model.Identity, vr Va
 	t.Helper()
 	ev := ComparativeEvaluator{}
 	ctx := EvalContext{
-		Endpoint: &model.Endpoint{Method: "GET", Host: "h", PathTemplate: "/x"},
-		Owner:    owner,
-		Calibration: cal,
+		Endpoint:         &model.Endpoint{Method: "GET", Host: "h", PathTemplate: "/x"},
+		Owner:            owner,
+		Calibration:      cal,
 		VariantResponses: []VariantResponse{vr},
 	}
 	res := ev.Evaluate(ctx)
@@ -207,7 +207,7 @@ func TestLadder_AmbiguousPenalty(t *testing.T) {
 	h.Set("Location", "/somewhere-else")
 	h.Set("Content-Type", "application/json")
 	vr := VariantResponse{
-		Variant: &model.Variant{ID: "v1", Mutation: model.Mutation{Type: "swap-identity"}},
+		Variant:  &model.Variant{ID: "v1", Mutation: model.Mutation{Type: "swap-identity"}},
 		Response: &model.Response{Status: 302, Headers: h, Body: []byte(body)},
 	}
 	vv := runLadder(t, cal, nil, vr)
@@ -360,6 +360,75 @@ func TestLadder_XXE_DeniedStatusEnforced(t *testing.T) {
 	vv := runLadder(t, cal, nil, vr)
 	if vv.Verdict != VerdictEnforced {
 		t.Errorf("403 must be enforced even with canary in body; got %s", vv.Verdict)
+	}
+}
+
+// gqlVR builds a VariantResponse for a --graphql variant. signal is the
+// graphql-signal detail ("introspection" or "malformed"); status and respBody
+// shape the response.
+func gqlVR(signal string, status int, respBody string) VariantResponse {
+	h := http.Header{}
+	h.Set("Content-Type", "application/json")
+	detail := map[string]string{"technique": signal, "graphql-signal": signal}
+	if signal == "introspection" {
+		detail["graphql-canary"] = "possession-graphql-alice-gql"
+	}
+	return VariantResponse{
+		Variant: &model.Variant{
+			ID:       "v-gql",
+			Mutation: model.Mutation{Type: "graphql", Class: "graphql-exposure", Detail: detail},
+		},
+		Response: &model.Response{Status: status, Headers: h, Body: []byte(respBody)},
+	}
+}
+
+// GraphQL introspection branch: response reflects __schema + queryType ⇒
+// decisive bypass (introspection enabled).
+func TestLadder_GraphQL_IntrospectionReflectedIsBypass(t *testing.T) {
+	cal := mkCal(`{"data":{"me":{"id":1}}}`, 200, false, false, false, 0.85)
+	body := `{"data":{"__schema":{"queryType":{"name":"Query"},"types":[]}}}`
+	vv := runLadder(t, cal, nil, gqlVR("introspection", 200, body))
+	if vv.Verdict != VerdictBypass {
+		t.Fatalf("want bypass, got %s notes=%v", vv.Verdict, vv.Notes)
+	}
+	if vv.Confidence != GraphQLIntrospectionConfidence {
+		t.Errorf("want confidence %v got %v", GraphQLIntrospectionConfidence, vv.Confidence)
+	}
+	if !anyNoteContains(vv.Notes, "graphql-introspection") {
+		t.Errorf("expected a graphql-introspection note; got %v", vv.Notes)
+	}
+}
+
+// Introspection branch needs BOTH __schema and a corroborating marker: a body
+// that merely echoes "__schema" in an error string must not trip the branch.
+func TestLadder_GraphQL_PartialMarkerNotBypass(t *testing.T) {
+	cal := mkCal(`{"data":{"me":{"id":1}}}`, 200, false, false, false, 0.85)
+	body := `{"errors":[{"message":"Cannot query field __schema on type Query"}]}`
+	vv := runLadder(t, cal, nil, gqlVR("introspection", 200, body))
+	if anyNoteContains(vv.Notes, "graphql-introspection") {
+		t.Errorf("introspection branch must not fire without a corroborating marker; notes=%v", vv.Notes)
+	}
+}
+
+// The malformed-query technique carries no introspection signal, so it never
+// trips the introspection branch even if the body looks schema-shaped.
+func TestLadder_GraphQL_MalformedNoIntrospectionBranch(t *testing.T) {
+	cal := mkCal(`{"data":{"me":{"id":1}}}`, 200, false, false, false, 0.85)
+	body := `{"data":{"__schema":{"queryType":{"name":"Query"}}}}`
+	vv := runLadder(t, cal, nil, gqlVR("malformed", 200, body))
+	if anyNoteContains(vv.Notes, "graphql-introspection") {
+		t.Errorf("malformed must not trip the introspection branch; notes=%v", vv.Notes)
+	}
+}
+
+// A denied (4xx) introspection response stops at the denied-status filter
+// before the introspection check — introspection disabled / access denied.
+func TestLadder_GraphQL_DeniedStatusNotBypass(t *testing.T) {
+	cal := mkCal(`{"data":{"me":{"id":1}}}`, 200, false, false, false, 0.85)
+	body := `{"data":{"__schema":{"queryType":{"name":"Query"}}}}`
+	vv := runLadder(t, cal, nil, gqlVR("introspection", 403, body))
+	if vv.Verdict != VerdictEnforced {
+		t.Errorf("403 must be enforced even with schema markers in body; got %s", vv.Verdict)
 	}
 }
 

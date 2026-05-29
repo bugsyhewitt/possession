@@ -75,6 +75,15 @@ const (
 	// appears in a non-expanding parser's response.
 	XXECanaryConfidence = 0.97
 
+	// GraphQLIntrospectionConfidence is the (near-certain) confidence for a
+	// GraphQL introspection-enabled finding: the variant sent the canonical
+	// introspection query and the response body reflects the introspection
+	// schema markers (__schema / queryType / __type). A server that answers an
+	// introspection query MUST have introspection enabled, so the signal is
+	// decisive and false-positive-free — those markers are GraphQL-internal
+	// type-system identifiers that only appear when the schema is walked.
+	GraphQLIntrospectionConfidence = 0.95
+
 	// AmbiguousPenalty multiplies the final confidence when the
 	// underlying status was 3xx (ambiguous). 3xx responses get the
 	// benefit of doubt but not full credit.
@@ -266,6 +275,7 @@ var ASVSByClass = map[string][]string{
 	"privesc":           {"v5.0.0-8.2.1"},
 	"auth-dependency":   {"v5.0.0-8.3.1"},
 	"xxe-injection":     {"v5.0.0-13.4.1"},
+	"graphql-exposure":  {"v5.0.0-14.3.2"},
 }
 
 // SeverityByClass is the BASE severity for `bypass` verdicts. `suspected`
@@ -277,6 +287,7 @@ var SeverityByClass = map[string]string{
 	"privesc":           "high",
 	"auth-dependency":   "low",
 	"xxe-injection":     "high",
+	"graphql-exposure":  "medium",
 }
 
 // SeverityOverrideByMutator pins a fixed base severity for specific
@@ -324,6 +335,8 @@ func MutatorClass(mutatorType string) string {
 		return "privesc"
 	case "xxe":
 		return "xxe-injection"
+	case "graphql":
+		return "graphql-exposure"
 	case "drop-cookie", "strip-token":
 		return "auth-dependency"
 	case "jwt-alg-none", "jwt-sig-strip", "jwt-resign-weak-key":
