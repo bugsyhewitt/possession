@@ -61,6 +61,7 @@ var (
 	scanWSHijack        bool   // --ws-hijack: replay WebSocket upgrade handshakes under stripped/swapped identities, flagging a 101 (off by default)
 	scanCSRFHeader      bool   // --csrf-header: forge/reflect anti-CSRF tokens (double-submit / presence-only bypass) using the caller's own credentials (off by default)
 	scanMethodOverride  bool   // --method-override: inject method-override headers + swap/case-toggle the request verb to bypass verb-based access control (off by default)
+	scanHostHeader      bool   // --host-header: override the Host + inject forwarded-host headers to reach a host-gated resource (off by default)
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -134,6 +135,8 @@ func init() {
 		"forge or reflect the anti-CSRF token using the caller's own credentials, testing for broken CSRF defenses: overwrite a matching header+cookie pair with one identical forged value (double-submit bypass), reflect the CSRF cookie value into the CSRF header, and inject a forged CSRF header where none was present (presence-only-check bypass); a request that still succeeds with a forged token is vulnerable to cross-site request forgery; off by default because it forges anti-CSRF tokens")
 	scanCmd.Flags().BoolVar(&scanMethodOverride, "method-override", false,
 		"test verb-based 403/401 access-control bypass using the caller's own credentials: inject method-override headers (X-HTTP-Method-Override, X-HTTP-Method, X-Method-Override) naming a verb that crosses the safe/unsafe boundary, swap the request-line method to sibling verbs (GET↔POST/HEAD/OPTIONS/PUT/PATCH) the gateway may not gate, and case-toggle the verb (GET → get) to defeat case-sensitive matchers; a request that succeeds under a tampered verb where the original was denied is a verb-based authorization bypass; off by default because verb-swap variants re-issue requests under state-changing methods")
+	scanCmd.Flags().BoolVar(&scanHostHeader, "host-header", false,
+		"test host-routing 403/401 access-control bypass using the caller's own credentials: override the wire Host (127.0.0.1, localhost, internal) to reach an internal/loopback virtual host, and inject forwarded-host override headers (X-Forwarded-Host, X-Host, X-Forwarded-Server, X-HTTP-Host-Override, Forwarded) a fronting proxy may trust for routing or link generation; a request that succeeds against a spoofed host where the public host did not is a host-header authorization bypass; off by default because the spoofed-host variants actively probe the routing layer and can reach internal-only vhosts on a misconfigured proxy")
 }
 
 func resetScanFlags() {
@@ -170,6 +173,7 @@ func resetScanFlags() {
 	scanWSHijack = false
 	scanCSRFHeader = false
 	scanMethodOverride = false
+	scanHostHeader = false
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -293,7 +297,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// derived from its representative sample's auth components.
 	attributionWarnings := attributeEndpoints(endpoints, matrix)
 
-	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate, scanJWTAttack, scanMassAssign, scanXXE, scanGraphQL, scanForbidBypass, scanWSHijack, scanCSRFHeader, scanMethodOverride)
+	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate, scanJWTAttack, scanMassAssign, scanXXE, scanGraphQL, scanForbidBypass, scanWSHijack, scanCSRFHeader, scanMethodOverride, scanHostHeader)
 	if err != nil {
 		return err
 	}
@@ -1205,12 +1209,13 @@ func buildEvaluator(name string, matrix *model.RoleMatrix) (detect.Evaluator, er
 // (--forbidden-bypass) mutator when forbidBypass is true, and enabling the
 // WSHijack (--ws-hijack) mutator when wsHijack is true, enabling the
 // CSRFHeader (--csrf-header) mutator when csrfHeader is true, and enabling the
-// MethodOverride (--method-override) mutator when methodOverride is true.
+// MethodOverride (--method-override) mutator when methodOverride is true, and
+// enabling the HostHeader (--host-header) mutator when hostHeader is true.
 // EnumerateID, JWTAuth, MassAssign, XXE, GraphQL, ForbiddenBypass, WSHijack,
-// CSRFHeader, and MethodOverride are always registered but inert in their
-// disabled state, so the canonical DefaultRegistry order (and the order test)
-// stays unchanged.
-func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, xxe, graphql, forbidBypass, wsHijack, csrfHeader, methodOverride bool) (*mutate.Registry, error) {
+// CSRFHeader, MethodOverride, and HostHeader are always registered but inert in
+// their disabled state, so the canonical DefaultRegistry order (and the order
+// test) stays unchanged.
+func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, xxe, graphql, forbidBypass, wsHijack, csrfHeader, methodOverride, hostHeader bool) (*mutate.Registry, error) {
 	enumMutator := mutate.EnumerateID{N: enumerateN}
 	jwtAuthMutator := mutate.JWTAuth{Enabled: jwtAttack}
 	massAssignMutator := mutate.MassAssign{Enabled: massAssign}
@@ -1220,13 +1225,14 @@ func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, x
 	wsHijackMutator := mutate.WSHijack{Enabled: wsHijack}
 	csrfHeaderMutator := mutate.CSRFHeader{Enabled: csrfHeader}
 	methodOverrideMutator := mutate.MethodOverride{Enabled: methodOverride}
+	hostHeaderMutator := mutate.HostHeader{Enabled: hostHeader}
 
 	if wordlistPath == "" {
 		// Extend the default registry with EnumerateID + JWTAuth +
 		// MassAssign + XXE + GraphQL + ForbiddenBypass + WSHijack + CSRFHeader +
-		// MethodOverride (all no-op in their disabled state).
+		// MethodOverride + HostHeader (all no-op in their disabled state).
 		base := mutate.DefaultRegistry()
-		all := append(base.All(), enumMutator, jwtAuthMutator, massAssignMutator, xxeMutator, graphqlMutator, forbidMutator, wsHijackMutator, csrfHeaderMutator, methodOverrideMutator)
+		all := append(base.All(), enumMutator, jwtAuthMutator, massAssignMutator, xxeMutator, graphqlMutator, forbidMutator, wsHijackMutator, csrfHeaderMutator, methodOverrideMutator, hostHeaderMutator)
 		return mutate.NewRegistry(all...), nil
 	}
 	data, err := os.ReadFile(wordlistPath)
@@ -1262,6 +1268,7 @@ func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, x
 		wsHijackMutator,
 		csrfHeaderMutator,
 		methodOverrideMutator,
+		hostHeaderMutator,
 	), nil
 }
 

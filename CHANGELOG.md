@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Host-header bypass mutator** (`--host-header`,
+  `internal/mutate/host_header.go`): a new mutator in the access-control bypass
+  family. Where `--forbidden-bypass` attacks *how the request path is matched*
+  and `--method-override` attacks *which verb is evaluated*, `--host-header`
+  attacks *which host the access-control layer believes the request targets* —
+  the canonical "host-header injection" technique. Many deployments route or
+  authorize from the `Host` (or a forwarded-host header a fronting proxy trusts);
+  spoofing the host can reach an internal/loopback virtual host, hit an admin
+  vhost from the public edge, or poison host-derived behaviour, all while keeping
+  the caller's own credentials (no identity swap). Two technique families, each a
+  separate variant for attribution and emitted in deterministic sorted order:
+  host-override (replace the wire `Host` with `127.0.0.1` / `localhost` /
+  `internal`; a no-op where the spoof equals the request's own host is skipped)
+  and forwarded-host (keep the real `Host` on the request line and inject a
+  forwarded-host override header — `X-Forwarded-Host`, `X-Host`,
+  `X-Forwarded-Server`, `X-HTTP-Host-Override`, or RFC 7239 `Forwarded:
+  host=…` — one variant per header×host). These complement `--forbidden-bypass`'s
+  rewrite headers (`X-Original-URL`, `X-Rewrite-URL`, `X-Forwarded-For`), which
+  spoof the URL and client IP but never the host. Detection rides the existing
+  comparative ladder unchanged: a variant returning an owner-shaped 2xx where the
+  caller's public-host baseline did not, under a spoofed host, is the bypass
+  (class `authz-bypass`, ASVS V8.3.x). Pure and deterministic (host values are
+  constants), so `--dry-run` and the offline corpus cover it for free. **Off by
+  default**: the spoofed-host variants actively probe the routing layer and can
+  reach internal-only vhosts on a misconfigured proxy, mirroring the gating of
+  `--forbidden-bypass`, `--method-override`, `--csrf-header`, `--ws-hijack`,
+  `--xxe`, and `--mass-assign`. Registered (inert when disabled) so the canonical
+  `DefaultRegistry` order is unchanged.
+
+### Fixed
+
+- **Captured/mutated `Host` header now reaches the wire**
+  (`internal/replay/engine.go`, `buildHTTPRequest`): Go's `net/http` sends the
+  request host from `http.Request.Host`, not a `Host` entry in the header map
+  (which it silently ignores). `buildHTTPRequest` now promotes a `Host` header
+  onto `req.Host` and removes it from the header map, so a spoofed host (the new
+  `--host-header` mutator) and any genuinely captured `Host` actually reach the
+  target. Requests without a `Host` header are unchanged (host derived from the
+  URL as before).
+
 - **HTTP verb / method-override bypass mutator** (`--method-override`,
   `internal/mutate/method_override.go`): a new mutator in the access-control
   bypass family. Where `--forbidden-bypass` attacks *how the request path is

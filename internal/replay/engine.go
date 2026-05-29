@@ -525,6 +525,16 @@ func buildHTTPRequest(ctx context.Context, base *model.CapturedRequest) (*http.R
 	if req.Header == nil {
 		req.Header = http.Header{}
 	}
+	// net/http sends the Host from req.Host, NOT a "Host" entry in the header
+	// map (it ignores the latter). Promote a captured/mutated Host header onto
+	// req.Host so a spoofed host (host-header mutator) and any genuinely
+	// captured Host actually reach the wire; then drop it from the header map to
+	// avoid a duplicate. When absent, req.Host stays empty and net/http derives
+	// it from the URL host as before.
+	if h := req.Header.Get("Host"); h != "" {
+		req.Host = h
+		req.Header.Del("Host")
+	}
 	for _, c := range base.Cookies {
 		if c != nil {
 			req.AddCookie(c)

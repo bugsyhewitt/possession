@@ -27,7 +27,7 @@ func protectedScanReq() *model.CapturedRequest {
 // flows through buildRegistry: the mutator is always registered, but only
 // emits variants when the flag is set.
 func TestBuildRegistry_ForbiddenBypassGating(t *testing.T) {
-	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false)
+	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry off: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestBuildRegistry_ForbiddenBypassGating(t *testing.T) {
 		t.Fatalf("forbidden-bypass must always be registered, even when disabled")
 	}
 
-	regOn, err := buildRegistry("", 0, false, false, false, false, true, false, false, false)
+	regOn, err := buildRegistry("", 0, false, false, false, false, true, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry on: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestBuildRegistry_ForbiddenBypassWithWordlist(t *testing.T) {
 	if err := os.WriteFile(f, []byte("secret\n"), 0o644); err != nil {
 		t.Fatalf("write wordlist: %v", err)
 	}
-	reg, err := buildRegistry(f, 0, false, false, false, false, true, false, false, false)
+	reg, err := buildRegistry(f, 0, false, false, false, false, true, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry with wordlist: %v", err)
 	}
@@ -93,7 +93,7 @@ func wsScanReq() *model.CapturedRequest {
 // buildRegistry: the mutator is always registered, but only emits variants when
 // the flag is set.
 func TestBuildRegistry_WSHijackGating(t *testing.T) {
-	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false)
+	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry off: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestBuildRegistry_WSHijackGating(t *testing.T) {
 		t.Errorf("disabled ws-hijack emitted %d variants; want 0", len(vs))
 	}
 
-	regOn, err := buildRegistry("", 0, false, false, false, false, false, true, false, false)
+	regOn, err := buildRegistry("", 0, false, false, false, false, false, true, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry on: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestBuildRegistry_WSHijackWithWordlist(t *testing.T) {
 	if err := os.WriteFile(f, []byte("secret\n"), 0o644); err != nil {
 		t.Fatalf("write wordlist: %v", err)
 	}
-	reg, err := buildRegistry(f, 0, false, false, false, false, false, true, false, false)
+	reg, err := buildRegistry(f, 0, false, false, false, false, false, true, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry with wordlist: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestBuildRegistry_WSHijackWithWordlist(t *testing.T) {
 // through buildRegistry: the mutator is always registered, but only emits
 // variants when the flag is set.
 func TestBuildRegistry_MethodOverrideGating(t *testing.T) {
-	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false)
+	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry off: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestBuildRegistry_MethodOverrideGating(t *testing.T) {
 		t.Errorf("disabled method-override emitted %d variants; want 0", len(vs))
 	}
 
-	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, true)
+	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, true, false)
 	if err != nil {
 		t.Fatalf("buildRegistry on: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestBuildRegistry_MethodOverrideWithWordlist(t *testing.T) {
 	if err := os.WriteFile(f, []byte("secret\n"), 0o644); err != nil {
 		t.Fatalf("write wordlist: %v", err)
 	}
-	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, true)
+	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, true, false)
 	if err != nil {
 		t.Fatalf("buildRegistry with wordlist: %v", err)
 	}
@@ -181,5 +181,52 @@ func TestBuildRegistry_MethodOverrideWithWordlist(t *testing.T) {
 	}
 	if vs := reg.Get("method-override").Generate(protectedScanReq(), nil); len(vs) == 0 {
 		t.Errorf("enabled method-override (wordlist path) emitted 0 variants")
+	}
+}
+
+// TestBuildRegistry_HostHeaderGating proves the --host-header flag flows through
+// buildRegistry: the mutator is always registered, but only emits variants when
+// the flag is set.
+func TestBuildRegistry_HostHeaderGating(t *testing.T) {
+	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false)
+	if err != nil {
+		t.Fatalf("buildRegistry off: %v", err)
+	}
+	if regOff.Get("host-header") == nil {
+		t.Fatalf("host-header must always be registered, even when disabled")
+	}
+	if vs := regOff.Get("host-header").Generate(protectedScanReq(), nil); len(vs) != 0 {
+		t.Errorf("disabled host-header emitted %d variants; want 0", len(vs))
+	}
+
+	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, true)
+	if err != nil {
+		t.Fatalf("buildRegistry on: %v", err)
+	}
+	m := regOn.Get("host-header")
+	if m == nil {
+		t.Fatalf("host-header missing from registry when enabled")
+	}
+	if vs := m.Generate(protectedScanReq(), nil); len(vs) == 0 {
+		t.Errorf("enabled host-header emitted 0 variants; want > 0")
+	}
+}
+
+// TestBuildRegistry_HostHeaderWithWordlist verifies the alternate (wordlist)
+// construction path also wires the gated host-header mutator.
+func TestBuildRegistry_HostHeaderWithWordlist(t *testing.T) {
+	f := t.TempDir() + "/wl.txt"
+	if err := os.WriteFile(f, []byte("secret\n"), 0o644); err != nil {
+		t.Fatalf("write wordlist: %v", err)
+	}
+	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, false, true)
+	if err != nil {
+		t.Fatalf("buildRegistry with wordlist: %v", err)
+	}
+	if reg.Get("host-header") == nil {
+		t.Fatalf("host-header missing from wordlist-path registry")
+	}
+	if vs := reg.Get("host-header").Generate(protectedScanReq(), nil); len(vs) == 0 {
+		t.Errorf("enabled host-header (wordlist path) emitted 0 variants")
 	}
 }
