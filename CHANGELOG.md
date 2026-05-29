@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **XML External Entity / XXE mutator** (`--xxe`, `internal/mutate/xxe.go`): a
+  new mutator that attacks *how the request body itself is parsed*. For APIs that
+  accept **XML** request bodies, it tests whether the server's XML parser
+  resolves external/internal entities — the root cause of file disclosure, SSRF,
+  and parser DoS. For every captured request carrying an XML body (by
+  `Content-Type` or body shape), it keeps the caller's own credentials and emits
+  one variant per technique, rewriting the body to carry a malicious `DOCTYPE`:
+  an `internal-entity` variant whose entity value is a unique per-endpoint canary
+  string, and an `external-system` variant defining a `SYSTEM` entity pointing at
+  `file:///etc/passwd`. Detection for the internal-entity technique is decisive
+  and false-positive-free: a new evaluator branch (gated on
+  `Mutation.Detail["xxe-canary"]`) raises a `xxe-injection`/HIGH bypass at
+  near-certain confidence when the response reflects the canary verbatim — proof
+  the parser expanded the entity. The branch sits ahead of the comparative
+  similarity work (XXE has no owner/actor baseline) but behind the
+  error/denied-status filters, so a `4xx`/`5xx` is still enforced even if it
+  echoes the canary. The external-system technique carries no canary and falls
+  through to the normal comparative ladder. Any pre-existing `DOCTYPE` is stripped
+  first (no double-DOCTYPE), and an XML `Content-Type` is forced when absent.
+  Pure and deterministic like every mutator (techniques emitted in sorted order,
+  canary derived from the request's deterministic ID), so `--dry-run` and the
+  offline corpus cover it for free. Off by default because the payloads are
+  write-shaped against the parser and the SYSTEM-entity variant probes for
+  local-file / SSRF resolution; non-XML bodies (JSON, form-encoded, empty) and
+  self-closing-only roots produce no variants. Registered (inert when disabled)
+  in `buildRegistry`, kept out of `DefaultRegistry` like the other gated
+  mutators. New ASVS (`v5.0.0-13.4.1`) and severity mappings added for the
+  `xxe-injection` class. (POST_V01 R18 candidate: XXE mutator for XML APIs.)
 - **Mass-assignment / BOPLA mutator** (`--mass-assign`,
   `internal/mutate/mass_assign.go`): a new mutator that completes the third axis
   of an authorization test. Where `swap-identity` attacks *who* the caller is and

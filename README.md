@@ -268,6 +268,40 @@ swaps, these variants are write-shaped (they ride POST/PUT/PATCH) and mutate
 server state, so they only fire when you opt in. Requests without a JSON object
 body (GET, form-encoded, JSON arrays, empty bodies) produce no variants.
 
+## XML External Entity / XXE (`--xxe`)
+
+Where `--mass-assign` attacks *which properties* are bound, `--xxe` attacks *how
+the request body itself is parsed*. For APIs that accept **XML** request bodies,
+it tests whether the server's XML parser resolves external/internal entities —
+the root cause of file disclosure, SSRF, and parser DoS (XXE):
+
+```bash
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --xxe
+```
+
+For every captured request that carries an **XML** body (by `Content-Type` or
+body shape), it keeps the caller's own credentials untouched and emits one
+variant per technique, rewriting the body to carry a malicious `DOCTYPE`:
+
+| Technique         | Payload                                                        | Detection |
+|-------------------|---------------------------------------------------------------|-----------|
+| `internal-entity` | `<!DOCTYPE … [<!ENTITY xxe "<canary>">]>` + `&xxe;` reference  | A unique per-endpoint **canary** is the entity value; if the response reflects that canary verbatim, the parser expanded the entity ⇒ XXE confirmed (class `xxe-injection`, severity **HIGH**, near-certain confidence). |
+| `external-system` | `<!DOCTYPE … [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>`     | No canary; judged by the comparative differential (a 2xx whose body differs from the entity-stripped baseline). |
+
+Any pre-existing `DOCTYPE` in the body is stripped first (no double-DOCTYPE),
+and an XML `Content-Type` is forced when the original lacked one (some parsers
+only resolve entities for declared-XML bodies). The canary signal sits **outside
+the comparative ladder** — XXE has no owner/actor baseline — so a reflected
+canary is a decisive, false-positive-free bypass.
+
+`--xxe` is **off by default**: the payloads are write-shaped against the parser
+and the SYSTEM-entity variant deliberately probes for local-file / SSRF
+resolution, so it only fires when you opt in. Non-XML bodies (JSON,
+form-encoded, empty) and documents with only a self-closing root produce no
+variants.
+
 ## Role matrix
 
 The role matrix is YAML. Minimum viable shape:

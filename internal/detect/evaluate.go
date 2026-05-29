@@ -1,6 +1,7 @@
 package detect
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/bugsyhewitt/possession/internal/model"
@@ -134,6 +135,32 @@ func (ev ComparativeEvaluator) judge(vr VariantResponse, owner *model.Identity, 
 		}
 		vv.Notes = append(vv.Notes, fmt.Sprintf("status %d ⇒ enforced", statusVal))
 		return vv
+	}
+
+	// XXE canary branch (R18): a --xxe variant injects an internal entity
+	// whose value is a unique per-endpoint canary recorded in
+	// Mutation.Detail["xxe-canary"]. If the response body contains that
+	// canary verbatim, the server's XML parser expanded the entity ⇒ XML
+	// External Entity processing is confirmed. This is decisive and
+	// false-positive-free (the canary is unique and never present unless the
+	// parser reflected it), so it short-circuits the comparative ladder —
+	// XXE has no owner/actor baseline to compare against. The external-system
+	// technique carries no canary and falls through to the normal ladder,
+	// where a body diff from the entity-stripped baseline surfaces it.
+	if v != nil {
+		if canary := v.Mutation.Detail["xxe-canary"]; canary != "" {
+			var rawBody []byte
+			if r != nil {
+				rawBody = r.Body
+			}
+			if len(rawBody) > 0 && bytes.Contains(rawBody, []byte(canary)) {
+				vv.Verdict = VerdictBypass
+				vv.Confidence = XXECanaryConfidence
+				vv.Notes = append(vv.Notes,
+					"xxe-canary: response body reflects injected internal-entity canary ⇒ XML entity expansion confirmed (XXE)")
+				return vv
+			}
+		}
 	}
 
 	// Now we need the variant's normalized body for similarity/signature.

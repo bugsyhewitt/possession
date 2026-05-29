@@ -55,6 +55,7 @@ var (
 	scanResume          string // --resume <dir>: checkpoint responses incrementally; on re-run, skip already-completed variants (off by default)
 	scanRetry           bool   // --retry-inconclusive: re-issue transiently-failed variants once before detection (off by default)
 	scanMassAssign      bool   // --mass-assign: inject privileged properties into JSON request bodies (BOPLA; off by default)
+	scanXXE             bool   // --xxe: inject XML external/internal entities into XML request bodies (off by default)
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -116,6 +117,8 @@ func init() {
 		"re-issue each variant that failed transiently (transport error, 429, or 5xx) exactly once before detection; a flaky target's one-off failures stop masquerading as inconclusive verdicts (refresh/flow failures are NOT retried; rate-sensitive, costs extra requests; no effect under --replay)")
 	scanCmd.Flags().BoolVar(&scanMassAssign, "mass-assign", false,
 		"inject privileged properties (role:admin, is_admin:true, verified:true, …) into JSON object request bodies using the caller's own credentials, testing for mass-assignment / Broken Object Property Level Authorization (OWASP API #3); off by default because these variants are write-shaped and mutate server state")
+	scanCmd.Flags().BoolVar(&scanXXE, "xxe", false,
+		"inject XML external/internal entities (a canary internal entity and a file:///etc/passwd SYSTEM entity) into XML request bodies using the caller's own credentials, testing for XML External Entity (XXE) processing; off by default because the SYSTEM-entity payload probes the parser for local-file/SSRF resolution")
 }
 
 func resetScanFlags() {
@@ -146,6 +149,7 @@ func resetScanFlags() {
 	scanResume = ""
 	scanRetry = false
 	scanMassAssign = false
+	scanXXE = false
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -267,7 +271,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// derived from its representative sample's auth components.
 	attributionWarnings := attributeEndpoints(endpoints, matrix)
 
-	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate, scanJWTAttack, scanMassAssign)
+	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate, scanJWTAttack, scanMassAssign, scanXXE)
 	if err != nil {
 		return err
 	}
@@ -1173,20 +1177,21 @@ func buildEvaluator(name string, matrix *model.RoleMatrix) (detect.Evaluator, er
 // jwt-hmac-crack's wordlist with the contents of wordlistPath, enabling
 // the EnumerateID mutator when enumerateN > 0, enabling the JWTAuth
 // (--jwt-attack) mutator when jwtAttack is true, and enabling the
-// MassAssign (--mass-assign) mutator when massAssign is true. EnumerateID,
-// JWTAuth, and MassAssign are always registered but inert in their disabled
-// state, so the canonical DefaultRegistry order (and the order test) stays
-// unchanged.
-func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign bool) (*mutate.Registry, error) {
+// MassAssign (--mass-assign) mutator when massAssign is true, and enabling the
+// XXE (--xxe) mutator when xxe is true. EnumerateID, JWTAuth, MassAssign, and
+// XXE are always registered but inert in their disabled state, so the canonical
+// DefaultRegistry order (and the order test) stays unchanged.
+func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, xxe bool) (*mutate.Registry, error) {
 	enumMutator := mutate.EnumerateID{N: enumerateN}
 	jwtAuthMutator := mutate.JWTAuth{Enabled: jwtAttack}
 	massAssignMutator := mutate.MassAssign{Enabled: massAssign}
+	xxeMutator := mutate.XXE{Enabled: xxe}
 
 	if wordlistPath == "" {
 		// Extend the default registry with EnumerateID + JWTAuth +
-		// MassAssign (all no-op in their disabled state).
+		// MassAssign + XXE (all no-op in their disabled state).
 		base := mutate.DefaultRegistry()
-		all := append(base.All(), enumMutator, jwtAuthMutator, massAssignMutator)
+		all := append(base.All(), enumMutator, jwtAuthMutator, massAssignMutator, xxeMutator)
 		return mutate.NewRegistry(all...), nil
 	}
 	data, err := os.ReadFile(wordlistPath)
@@ -1216,6 +1221,7 @@ func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign bo
 		enumMutator,
 		jwtAuthMutator,
 		massAssignMutator,
+		xxeMutator,
 	), nil
 }
 

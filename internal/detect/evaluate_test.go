@@ -273,3 +273,102 @@ func indexOf(haystack, needle string) int {
 	}
 	return -1
 }
+
+// xxeVR builds a VariantResponse for an --xxe variant carrying the given
+// xxe-canary detail (empty = no canary, e.g. the external-system technique),
+// a 2xx status, and the given response body.
+func xxeVR(canary, respBody string) VariantResponse {
+	h := http.Header{}
+	h.Set("Content-Type", "application/xml")
+	detail := map[string]string{"technique": "internal-entity"}
+	if canary != "" {
+		detail["xxe-canary"] = canary
+	} else {
+		detail["technique"] = "external-system"
+	}
+	return VariantResponse{
+		Variant: &model.Variant{
+			ID:       "v-xxe",
+			Mutation: model.Mutation{Type: "xxe", Class: "xxe-injection", Detail: detail},
+		},
+		Response: &model.Response{Status: 200, Headers: h, Body: []byte(respBody)},
+	}
+}
+
+// XXE canary branch: canary reflected in the response body ⇒ decisive bypass.
+func TestLadder_XXE_CanaryReflectedIsBypass(t *testing.T) {
+	cal := mkCal(`<order><id>5</id></order>`, 200, false, false, false, 0.85)
+	canary := "possession-xxe-alice-xml-order"
+	vr := xxeVR(canary, `<result>echo: `+canary+` ok</result>`)
+	vv := runLadder(t, cal, nil, vr)
+	if vv.Verdict != VerdictBypass {
+		t.Fatalf("want bypass, got %s notes=%v", vv.Verdict, vv.Notes)
+	}
+	if vv.Confidence != XXECanaryConfidence {
+		t.Errorf("want confidence %v got %v", XXECanaryConfidence, vv.Confidence)
+	}
+	if !anyNoteContains(vv.Notes, "xxe-canary") {
+		t.Errorf("expected an xxe-canary note; got %v", vv.Notes)
+	}
+}
+
+// XXE canary branch: canary absent from the response body ⇒ NOT short-circuited
+// (falls through to the comparative ladder; here a denied-shaped body keeps it
+// from being a bypass via the canary path).
+func TestLadder_XXE_CanaryAbsentNotCanaryBypass(t *testing.T) {
+	cal := mkCal(`<order><id>5</id></order>`, 200, false, false, false, 0.85)
+	canary := "possession-xxe-alice-xml-order"
+	// Response does not contain the canary at all.
+	vr := xxeVR(canary, `<error>bad request: entity not allowed</error>`)
+	vv := runLadder(t, cal, nil, vr)
+	// Must NOT carry the xxe-canary note — the canary branch did not fire.
+	if anyNoteContains(vv.Notes, "xxe-canary") {
+		t.Errorf("canary branch must not fire when canary absent; notes=%v", vv.Notes)
+	}
+}
+
+// External-system XXE technique carries no canary, so it never trips the
+// canary branch and is judged by the normal comparative ladder.
+func TestLadder_XXE_ExternalSystemNoCanaryBranch(t *testing.T) {
+	cal := mkCal(`<order><id>5</id></order>`, 200, false, false, false, 0.85)
+	// Even if the body happened to contain something canary-shaped, there is
+	// no canary detail, so the branch is skipped.
+	vr := xxeVR("", `<result>root:x:0:0</result>`)
+	vv := runLadder(t, cal, nil, vr)
+	if anyNoteContains(vv.Notes, "xxe-canary") {
+		t.Errorf("external-system must not trip the canary branch; notes=%v", vv.Notes)
+	}
+}
+
+// XXE canary branch only fires on real reflection — a denied (4xx) response
+// stops at the denied-status filter before the canary check.
+func TestLadder_XXE_DeniedStatusEnforced(t *testing.T) {
+	cal := mkCal(`<order><id>5</id></order>`, 200, false, false, false, 0.85)
+	canary := "possession-xxe-alice-xml-order"
+	h := http.Header{}
+	h.Set("Content-Type", "application/xml")
+	vr := VariantResponse{
+		Variant: &model.Variant{
+			ID: "v-xxe", Mutation: model.Mutation{
+				Type: "xxe", Class: "xxe-injection",
+				Detail: map[string]string{"technique": "internal-entity", "xxe-canary": canary},
+			},
+		},
+		// 403 with the canary echoed — denied filter must win; no bypass.
+		Response: &model.Response{Status: 403, Headers: h, Body: []byte(canary)},
+	}
+	vv := runLadder(t, cal, nil, vr)
+	if vv.Verdict != VerdictEnforced {
+		t.Errorf("403 must be enforced even with canary in body; got %s", vv.Verdict)
+	}
+}
+
+// anyNoteContains reports whether any note contains the substring.
+func anyNoteContains(notes []string, sub string) bool {
+	for _, n := range notes {
+		if contains(n, sub) {
+			return true
+		}
+	}
+	return false
+}
