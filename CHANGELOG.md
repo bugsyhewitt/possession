@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Origin/Referer spoofing mutator** (`--origin-spoof`,
+  `internal/mutate/origin_spoof.go`): a new mutator in the access-control
+  bypass family. Where `--csrf-header` attacks *the anti-CSRF token*,
+  `--host-header` attacks *which host the access-control layer believes the
+  request targets*, and `--header-injection` attacks *which trusted-proxy
+  assertion the backend believes about the caller*, `--origin-spoof` attacks
+  *which originating site the access-control layer believes the request came
+  from* — the canonical "Origin/Referer-validation bypass" family every modern
+  CSRF cheat-sheet describes. Many backends and gateways enforce state-change
+  protection by validating the `Origin` (or `Referer`) header against an
+  allowlist (the standard OWASP-recommended CSRF defense), and just as commonly
+  implement the matcher wrong. Every variant keeps the caller's own credentials
+  (no identity swap — they merely claim the request originated from a site the
+  server should refuse). Three technique families, each a separate variant for
+  attribution and emitted in deterministic sorted order: null-origin (set
+  `Origin: null`, drop `Referer` — sandboxed iframes, `data:` / `javascript:`
+  documents, redirect laundering, and meta-referrer policies all produce the
+  literal origin `null`, which allowlists most commonly mishandle), cross-origin
+  (set `Origin` and `Referer` to a wholly-foreign attacker site
+  `https://attacker.example` — tests the baseline failure where the app does
+  not validate Origin at all), and suffix-confusion (three crafted attacker
+  hosts that defeat naive allowlist matching of the request's own host:
+  prefix-match `<host>.attacker.example`, suffix-match
+  `attacker-<host-with-dots-collapsed>.attacker.example`, and userinfo-confusion
+  `<host>@attacker.example`). Deliberately disjoint from `--csrf-header` (which
+  forges the anti-CSRF token, not the origin) and `--host-header` (which spoofs
+  the wire `Host`, not the `Origin`). Detection rides the existing comparative
+  ladder unchanged: a state-change that succeeds under a spoofed origin where a
+  correct check would refuse it is the bypass (class `authz-bypass`, ASVS
+  V8.3.x). Pure and deterministic — technique names and crafted hosts derive
+  from fixed templates and emit in sorted order — so `--dry-run` and the
+  offline corpus cover it for free. **Off by default**: the spoofed-origin
+  variants re-issue the (often state-changing) request asserting an
+  untrusted/forged origin against the access-control layer, so it only fires
+  when the operator opts in, mirroring the gating of `--parameter-pollution`,
+  `--header-injection`, `--cookie-tampering`, `--host-header`,
+  `--forbidden-bypass`, `--method-override`, `--csrf-header`, `--ws-hijack`,
+  `--xxe`, and `--mass-assign`.
 - **HTTP Parameter Pollution mutator** (`--parameter-pollution`,
   `internal/mutate/param_pollution.go`): a new mutator in the access-control
   bypass family. Where `--swap-object` *replaces* a reference value and

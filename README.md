@@ -725,6 +725,58 @@ only fires when you opt in — mirroring the gating of `--header-injection`,
 `--method-override`, `--csrf-header`, `--ws-hijack`, `--xxe`, and
 `--mass-assign`.
 
+## Origin/Referer spoofing (`--origin-spoof`)
+
+Where `--csrf-header` attacks *the anti-CSRF token*, `--host-header` attacks
+*which host the access-control layer believes the request targets*, and
+`--header-injection` attacks *which trusted-proxy assertion the backend believes
+about the caller*, `--origin-spoof` attacks *which originating site the
+access-control layer believes the request came from* — the canonical
+"Origin/Referer-validation bypass" family. Many backends and gateways enforce
+state-change protection by validating the `Origin` (or `Referer`) header against
+an allowlist — the standard OWASP-recommended CSRF defense — and just as
+commonly implement the matcher wrong. The bug being tested is *"the same
+caller's state-change is honoured when it claims to come from an untrusted (or
+cleverly-shaped) origin a correct check would reject."*
+
+Every variant keeps the **caller's own credentials** (no identity swap — the
+caller stays themselves; they merely lie about *where the request came from*):
+
+```bash
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --origin-spoof
+```
+
+| Technique | What it sends |
+|-----------|---------------|
+| `null-origin` | `Origin: null` with `Referer` dropped. Sandboxed iframes, `data:` / `javascript:` documents, redirect laundering, and meta-referrer policies all produce the literal origin `null`. Allowlists that special-case or fail-open on `null` (a very common mistake) accept it; a correct check refuses an unrecognised origin. |
+| `cross-origin` | `Origin` and `Referer` set to a wholly-foreign attacker site (`https://attacker.example`). Tests the baseline failure: an app that does not validate Origin at all (or only checks presence) honours a blatantly cross-site request. |
+| `suffix-confusion:prefix-match` | Crafted attacker host that *contains* the trusted host as a prefix label (`<host>.attacker.example`). Defeats a naive `Contains` / `HasPrefix` allowlist match against the request's own host. |
+| `suffix-confusion:suffix-match` | Crafted attacker host embedding the trusted labels (`attacker-<host-with-dots-collapsed>.attacker.example`). Defeats a naive `HasSuffix` match. |
+| `suffix-confusion:userinfo-confusion` | Authority of the form `<host>@attacker.example`. A parser splitting on the wrong delimiter mis-reads the trusted host while the real authority is `attacker.example`. |
+
+The injected values are well-formed origin/URL tokens — this is **not**
+CRLF/response-splitting (raw CR/LF in header values is rejected by `net/http`
+before reaching the wire) and **not** anti-CSRF-token forgery (that is
+`--csrf-header`). The technique here is lying about the *origin* of the
+request.
+
+Detection rides the **existing comparative ladder** unchanged: the caller's own
+baseline against the request with its real Origin/Referer is the reference; a
+variant that returns an owner-shaped 2xx (or otherwise differs from a denied
+baseline) under a spoofed origin is the bypass (class `authz-bypass`, ASVS
+V8.3.x). Like every mutator it is pure and deterministic — technique names and
+crafted hosts derive from fixed templates and emit in sorted order — so
+`--dry-run` and the offline corpus cover it for free.
+
+`--origin-spoof` is **off by default**: the spoofed-origin variants re-issue
+the (often state-changing) request asserting an untrusted/forged origin against
+the access-control layer, so it only fires when you opt in — mirroring the
+gating of `--parameter-pollution`, `--header-injection`, `--cookie-tampering`,
+`--host-header`, `--forbidden-bypass`, `--method-override`, `--csrf-header`,
+`--ws-hijack`, `--xxe`, and `--mass-assign`.
+
 ## Role matrix
 
 The role matrix is YAML. Minimum viable shape:
