@@ -89,7 +89,11 @@ Items deliberately left out of v1.0 to keep the scope bounded:
   surface new findings.~~ **Shipped in v1.2.**
 
 ### Operational
-- Resume on interrupt (persist plan + completed variants to disk).
+- ~~Resume on interrupt (persist plan + completed variants to disk).~~
+  **Shipped** (`--resume <dir>`): every completed response is checkpointed to an
+  append-only `checkpoint.jsonl` as it lands; a re-run with the same dir skips
+  already-completed variants and fires only the remainder. Crash-safe (torn tail
+  lines are skipped) and detection-identical to an uninterrupted run.
 - Replay-from-recording mode for offline re-evaluation without
   re-hitting the target.
 - ASVS V9 (Self-Contained Tokens) control mapping once IDs are

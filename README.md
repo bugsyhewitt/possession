@@ -503,6 +503,44 @@ mismatch between the recording and the matrix target warns loudly.
 This enables: tuning detection thresholds offline, A/B-testing evaluator
 changes, and re-scanning a target you only have permission to hit once.
 
+## Resume on interrupt (`--resume`)
+
+Long scans against rate-limited targets can take a while, and an interruption —
+Ctrl-C, a dropped connection, a quota wall, a host reboot — would otherwise
+throw away every request already fired. `--resume` makes a scan restartable:
+each completed response is checkpointed to disk as it lands, and re-running with
+the same `--resume <dir>` skips every variant already recorded and fires only
+the remainder.
+
+```bash
+# Start a long scan with a resume checkpoint.
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --resume runs/job-42
+# ... interrupted partway through (Ctrl-C, network drop, quota) ...
+
+# Re-run the SAME command. Already-completed variants are skipped;
+# only the requests that never finished are fired.
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --resume runs/job-42
+```
+
+The checkpoint is an append-only `checkpoint.jsonl` written into the directory —
+one line per completed response, flushed immediately. A crash mid-write can at
+worst leave a torn final line, which is skipped on reload (that one variant is
+simply re-fired), so a checkpoint can never poison a resume. Responses are keyed
+by their deterministic variant ID, so a resumed-then-completed scan feeds
+detection exactly the same inputs as an uninterrupted run.
+
+| Flag             | Behaviour                                                                       |
+|------------------|---------------------------------------------------------------------------------|
+| `--resume <dir>` | Checkpoint each response to `<dir>/checkpoint.jsonl`; skip already-done variants on re-run |
+
+`--resume` is mutually exclusive with `--replay` (replay fires no requests, so
+there is nothing to resume). Combine `--resume` with `--record` to keep both a
+crash-safe checkpoint and a final replayable recording.
+
 ## What ships in v1.0
 
 - 9 mutators total: 5 classic (`strip-auth`, `swap-identity`,
