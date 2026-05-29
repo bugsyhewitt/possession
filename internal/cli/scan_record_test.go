@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/bugsyhewitt/possession/internal/record"
@@ -139,9 +140,13 @@ settings:
 // assert the recording is written, the replay fires no requests, and detection
 // produces identical JSON findings.
 func TestScanRecordThenReplay_RoundTrip(t *testing.T) {
-	var hits int
+	// hits is mutated from the httptest server's per-connection goroutines and
+	// read from the test goroutine. possession's replay engine fans variants out
+	// across `concurrency` goroutines, so the handler runs concurrently — use an
+	// atomic counter to keep the increments and reads race-free under -race.
+	var hits atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits++
+		hits.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		// Server leaks alice's email regardless of caller ⇒ IDOR signal for bob.
 		fmt.Fprint(w, `{"email":"alice@example.com"}`)
@@ -171,7 +176,7 @@ func TestScanRecordThenReplay_RoundTrip(t *testing.T) {
 	if !strings.Contains(recStderr, "recording written") {
 		t.Errorf("expected 'recording written' notice on stderr, got: %s", recStderr)
 	}
-	if hits == 0 {
+	if hits.Load() == 0 {
 		t.Fatal("record run never hit the server")
 	}
 	if _, err := os.Stat(filepath.Join(recDir, record.Filename)); err != nil {
@@ -180,7 +185,7 @@ func TestScanRecordThenReplay_RoundTrip(t *testing.T) {
 
 	// 2. Replay the recording. Stop the server first to PROVE no network is hit.
 	srv.Close()
-	hitsBeforeReplay := hits
+	hitsBeforeReplay := hits.Load()
 
 	replayStderr, err := runScanCmd(t,
 		harPath,
@@ -193,8 +198,8 @@ func TestScanRecordThenReplay_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replay run failed: %v\noutput: %s", err, replayStderr)
 	}
-	if hits != hitsBeforeReplay {
-		t.Errorf("replay fired %d network request(s); expected 0", hits-hitsBeforeReplay)
+	if got := hits.Load(); got != hitsBeforeReplay {
+		t.Errorf("replay fired %d network request(s); expected 0", got-hitsBeforeReplay)
 	}
 
 	// 3. Findings must match between the live run and the offline replay.
