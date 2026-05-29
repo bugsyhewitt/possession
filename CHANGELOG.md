@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Burp Suite XML input parser** (`--format burp`, `internal/parse/burp.go`):
+  a sixth capture format alongside HAR/curl/OpenAPI/Postman/mitmproxy. possession
+  positions itself as the standalone alternative to Burp Autorize, but most
+  hunters already capture their traffic *in* Burp — this parser lets them feed a
+  Burp "Save items" / proxy-history XML export (`<items><item>…`) straight into
+  `scan`/`parse` with no re-capture. For each `<item>` it parses the raw HTTP
+  request (the `<request>` element — `base64="true"` decoded, otherwise verbatim)
+  as authoritative for method, headers, cookies, and body, and assembles the
+  absolute URL from the `<url>` field or the structured
+  `<protocol>`/`<host>`/`<port>`/`<path>` (default ports elided, non-default
+  preserved). An item with no usable raw request falls back to the structured
+  fields. The same hygiene as the HAR parser applies — static assets, font/image/
+  css/js content types, and well-known analytics hosts are dropped — so a Burp
+  export and the equivalent HAR dedup to the same endpoints; one malformed item
+  is skipped without failing the parse. Auto-detected by the `.xml` extension or
+  a leading `<`. Synthesized endpoints feed every mutator exactly like HAR/curl
+  captures.
+
 - **XML External Entity / XXE mutator** (`--xxe`, `internal/mutate/xxe.go`): a
   new mutator that attacks *how the request body itself is parsed*. For APIs that
   accept **XML** request bodies, it tests whether the server's XML parser

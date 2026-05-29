@@ -21,7 +21,7 @@ you can invoke from a Makefile, a pipeline, or a Pho3nix-style harness.
 Pipeline:
 
 ```
-HAR/curl/OpenAPI/Postman/mitmproxy + role-matrix YAML
+HAR/curl/OpenAPI/Postman/mitmproxy/Burp + role-matrix YAML
     → parse + normalize + scope filter
     → variant generation (identity-swap, object-swap, JWT, … × N identities)
     → replay engine (rate-limited, refresh-aware)
@@ -94,8 +94,8 @@ a full walkthrough.
 
 ## Input formats
 
-`scan` and `parse` accept five capture formats, auto-detected by extension
-and content (override with `--format har|curl|openapi|postman|mitmproxy`):
+`scan` and `parse` accept six capture formats, auto-detected by extension
+and content (override with `--format har|curl|openapi|postman|mitmproxy|burp`):
 
 | Format    | Detected by                              | Produces                          |
 |-----------|------------------------------------------|-----------------------------------|
@@ -104,6 +104,7 @@ and content (override with `--format har|curl|openapi|postman|mitmproxy`):
 | `openapi` | `.yaml`/`.yml`, or JSON with an `openapi`/`swagger` key | one request per operation |
 | `postman` | JSON with a `collection/v2` schema marker, `_postman_id`, or `info`+`item` | one request per request item |
 | `mitmproxy` | `.jsonl`/`.ndjson`, a top-level JSON array, or a JSON flow object (`request` + `scheme`/`server_conn`, no `log`) | one request per HTTP flow |
+| `burp`    | `.xml`, or a leading `<` (Burp `<items>` export) | one request per `<item>` |
 
 ### OpenAPI 3.x
 
@@ -200,6 +201,38 @@ skipped, and one malformed flow or JSON-Lines line is skipped without failing
 the parse. mitmproxy's native binary `.flow`/`.mitm` files are **not** read
 directly — export them as JSON (above) or as a HAR. Synthesized endpoints feed
 every mutator exactly like HAR/curl captures.
+
+### Burp Suite XML
+
+possession is the standalone alternative to Burp Autorize — but most hunters
+already capture their traffic *in* Burp. Point possession straight at a Burp
+"Save items" / proxy-history XML export (right-click selected requests →
+**Save items**, or the Proxy → HTTP history "Save selected items"), no
+re-capture required:
+
+```bash
+possession scan history.xml \
+    --matrix matrix.yaml \
+    --dry-run
+```
+
+For each `<item>` possession reconstructs a replayable request:
+
+- the **raw request** (the `<request>` element — `base64="true"` is decoded,
+  otherwise the CDATA/text is taken verbatim) is authoritative for method,
+  headers, cookies, and body; it is what actually went on the wire;
+- the absolute URL is taken from the item's `<url>` field, or assembled from
+  `<protocol>`/`<host>`/`<port>`/`<path>` (default ports `80`/`443` are elided;
+  a non-default port is preserved);
+- the `Cookie` header is split into individual cookies;
+- an item with no usable `<request>` falls back to the structured
+  `<method>`/`<url>` fields alone.
+
+The same hygiene as the HAR parser applies — static assets, font/image/css/js
+content types, and well-known analytics hosts are dropped, so a Burp export and
+the equivalent HAR dedup to the same endpoints. One malformed item is skipped
+without failing the parse. Synthesized endpoints feed every mutator exactly
+like HAR/curl captures.
 
 ## Token-level JWT attacks (`--jwt-attack`)
 
@@ -725,7 +758,7 @@ default and rate-sensitive — pair it with a conservative `--rate`.
   `downgrade-role`, `drop-cookie`, `strip-token`) + 4 JWT
   (`jwt-alg-none`, `jwt-sig-strip`, `jwt-claim-tamper`,
   `jwt-resign-weak-key`).
-- HAR + curl + OpenAPI 3.x + Postman v2 + mitmproxy JSON input.
+- HAR + curl + OpenAPI 3.x + Postman v2 + mitmproxy JSON + Burp XML input.
 - Per-host token-bucket rate limiter, bounded concurrency, adaptive
   429/503 backoff, Tier-1 dynamic refresh hooks.
 - Calibrated N-sample baseline, 10-branch verdict ladder, ASVS V8

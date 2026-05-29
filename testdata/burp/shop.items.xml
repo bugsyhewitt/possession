@@ -1,0 +1,72 @@
+<?xml version="1.0"?>
+<!DOCTYPE items [
+<!ELEMENT items (item*)>
+]>
+<items burpVersion="2024.1" exportTime="Wed May 29 12:00:00 UTC 2026">
+  <item>
+    <url><![CDATA[https://api.shop.example.com/api/users/8821/profile?expand=true]]></url>
+    <host ip="93.184.216.34">api.shop.example.com</host>
+    <port>443</port>
+    <protocol>https</protocol>
+    <method><![CDATA[GET]]></method>
+    <path><![CDATA[/api/users/8821/profile?expand=true]]></path>
+    <request base64="true">R0VUIC9hcGkvdXNlcnMvODgyMS9wcm9maWxlP2V4cGFuZD10cnVlIEhUVFAvMS4xDQpIb3N0OiBhcGkuc2hvcC5leGFtcGxlLmNvbQ0KQ29va2llOiBzZXNzaW9uPWFsaWNlDQpBY2NlcHQ6IGFwcGxpY2F0aW9uL2pzb24NCg0K</request>
+    <status>200</status>
+  </item>
+  <item>
+    <url><![CDATA[https://api.shop.example.com/api/orders/9001]]></url>
+    <host ip="93.184.216.34">api.shop.example.com</host>
+    <port>443</port>
+    <protocol>https</protocol>
+    <method><![CDATA[GET]]></method>
+    <path><![CDATA[/api/orders/9001]]></path>
+    <request base64="true">R0VUIC9hcGkvb3JkZXJzLzkwMDEgSFRUUC8xLjENCkhvc3Q6IGFwaS5zaG9wLmV4YW1wbGUuY29tDQpBdXRob3JpemF0aW9uOiBCZWFyZXIgdG9rX2FsaWNlDQoNCg==</request>
+    <status>200</status>
+  </item>
+  <item>
+    <url><![CDATA[https://api.shop.example.com/api/cart/items]]></url>
+    <host ip="93.184.216.34">api.shop.example.com</host>
+    <port>443</port>
+    <protocol>https</protocol>
+    <method><![CDATA[POST]]></method>
+    <path><![CDATA[/api/cart/items]]></path>
+    <request base64="true">UE9TVCAvYXBpL2NhcnQvaXRlbXMgSFRUUC8xLjENCkhvc3Q6IGFwaS5zaG9wLmV4YW1wbGUuY29tDQpDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL2pzb24NCkNvbnRlbnQtTGVuZ3RoOiAxMQ0KDQp7InNrdSI6IngifQ==</request>
+    <status>201</status>
+  </item>
+  <item>
+    <url><![CDATA[https://admin.shop.example.com:8443/api/reports/sales]]></url>
+    <host ip="93.184.216.35">admin.shop.example.com</host>
+    <port>8443</port>
+    <protocol>https</protocol>
+    <method><![CDATA[GET]]></method>
+    <path><![CDATA[/api/reports/sales]]></path>
+    <request base64="true">R0VUIC9hcGkvcmVwb3J0cy9zYWxlcyBIVFRQLzEuMQ0KSG9zdDogYWRtaW4uc2hvcC5leGFtcGxlLmNvbTo4NDQzDQpBY2NlcHQ6IGFwcGxpY2F0aW9uL2pzb24NCg0K</request>
+    <status>200</status>
+  </item>
+  <item>
+    <url><![CDATA[https://api.shop.example.com/static/app.js]]></url>
+    <host ip="93.184.216.34">api.shop.example.com</host>
+    <port>443</port>
+    <protocol>https</protocol>
+    <method><![CDATA[GET]]></method>
+    <path><![CDATA[/static/app.js]]></path>
+    <request base64="false">GET /static/app.js HTTP/1.1
+Host: api.shop.example.com
+
+</request>
+    <status>200</status>
+  </item>
+  <item>
+    <url><![CDATA[https://www.google-analytics.com/collect?v=1]]></url>
+    <host ip="142.250.80.46">www.google-analytics.com</host>
+    <port>443</port>
+    <protocol>https</protocol>
+    <method><![CDATA[POST]]></method>
+    <path><![CDATA[/collect?v=1]]></path>
+    <request base64="false">POST /collect?v=1 HTTP/1.1
+Host: www.google-analytics.com
+
+</request>
+    <status>200</status>
+  </item>
+</items>
