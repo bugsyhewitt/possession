@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Anti-CSRF token bypass mutator** (`--csrf-header`,
+  `internal/mutate/csrf_header.go`): a new mutator that is the inverse of
+  `strip-token`. Where `strip-token` *removes* the CSRF header to probe whether
+  the server depends on it, `--csrf-header` **forges or reflects** the anti-CSRF
+  token using the caller's own credentials to probe whether the server's CSRF
+  validation can be satisfied with a value the caller controls — the classic
+  broken double-submit-cookie / presence-only-check family. Every variant keeps
+  the caller's own credentials (no identity swap, no token strip): the bug being
+  tested is "the same caller submits a CSRF token the server should reject, and
+  the request still succeeds." Three techniques, each a separate variant for
+  attribution and emitted in deterministic sorted order: `forged-double-submit`
+  (when both a CSRF header and a CSRF cookie are present, overwrite *both* with
+  one identical attacker-chosen value — a naive `header == cookie` check still
+  passes), `reflect-cookie-to-header` (copy the CSRF cookie value verbatim into
+  the CSRF header — the textbook double-submit reflection an attacker who can
+  plant the cookie abuses), and `inject-missing-header` (when no CSRF header is
+  present, inject `X-CSRF-Token` with a forged value to test presence-only
+  enforcement). A header/cookie name is CSRF-ish when it contains `csrf` or
+  `xsrf` (case-insensitive), matching `strip-token`'s heuristic. Detection rides
+  the existing comparative ladder unchanged: the caller's own baseline is the
+  legitimate request with its real token; a variant that returns an owner-shaped
+  2xx with a forged/reflected token is the bypass (class `authz-bypass`, ASVS
+  V8.3.x). Pure and deterministic (the forged token is a constant), so
+  `--dry-run` and the offline corpus cover it for free. **Off by default**:
+  forging an anti-CSRF token is an active access-control probe, mirroring the
+  gating of `--xxe`, `--mass-assign`, `--forbidden-bypass`, `--ws-hijack`, and
+  `--jwt-attack`. Registered (inert when disabled) so the canonical
+  `DefaultRegistry` order is unchanged. A request with no CSRF header and no CSRF
+  cookie yields a single `inject-missing-header` variant; a request with a CSRF
+  header but no CSRF cookie yields no variants.
+
 - **WebSocket upgrade hijack mutator** (`--ws-hijack`,
   `internal/mutate/ws_hijack.go`): a new mutator that attacks the one request
   applications most often forget to authorize — the HTTP → WebSocket upgrade
