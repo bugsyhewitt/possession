@@ -270,6 +270,7 @@ var LoginRedirectHints = []string{
 // Used by detect/finding.go. Fixed mapping per §5.3 of the Packet-3 brief.
 var ASVSByClass = map[string][]string{
 	"authn-bypass":      {"v5.0.0-8.3.1"},
+	"authz-bypass":      {"v5.0.0-8.3.1", "v5.0.0-8.2.1"},
 	"idor":              {"v5.0.0-8.2.2"},
 	"idor-cross-tenant": {"v5.0.0-8.4.1", "v5.0.0-8.2.2"},
 	"privesc":           {"v5.0.0-8.2.1"},
@@ -282,6 +283,7 @@ var ASVSByClass = map[string][]string{
 // verdicts drop one notch via DowngradeSeverity below.
 var SeverityByClass = map[string]string{
 	"authn-bypass":      "critical",
+	"authz-bypass":      "high",
 	"idor":              "high",
 	"idor-cross-tenant": "critical",
 	"privesc":           "high",
@@ -331,6 +333,8 @@ func MutatorClass(mutatorType string) string {
 		return "authn-bypass"
 	case "swap-identity", "swap-object":
 		return "idor"
+	case "forbidden-bypass":
+		return "authz-bypass"
 	case "downgrade-role", "mass-assign":
 		return "privesc"
 	case "xxe":
