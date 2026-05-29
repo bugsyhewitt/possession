@@ -57,6 +57,7 @@ var (
 	scanMassAssign      bool   // --mass-assign: inject privileged properties into JSON request bodies (BOPLA; off by default)
 	scanXXE             bool   // --xxe: inject XML external/internal entities into XML request bodies (off by default)
 	scanGraphQL         bool   // --graphql: probe GraphQL endpoints for introspection + verbose-error exposure (off by default)
+	scanForbidBypass    bool   // --forbidden-bypass: reshape path + inject rewrite headers to bypass 403/401 access control (off by default)
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -122,6 +123,8 @@ func init() {
 		"inject XML external/internal entities (a canary internal entity and a file:///etc/passwd SYSTEM entity) into XML request bodies using the caller's own credentials, testing for XML External Entity (XXE) processing; off by default because the SYSTEM-entity payload probes the parser for local-file/SSRF resolution")
 	scanCmd.Flags().BoolVar(&scanGraphQL, "graphql", false,
 		"probe GraphQL POST bodies (application/graphql, or JSON with a query field) using the caller's own credentials: a canonical introspection query (flags schema disclosure if introspection is enabled) and a malformed query (flags verbose-error leakage); off by default because it is active reconnaissance against the GraphQL layer")
+	scanCmd.Flags().BoolVar(&scanForbidBypass, "forbidden-bypass", false,
+		"test 403/401 access-control bypass using the caller's own credentials: reshape the request path (trailing slash, /..;/ traversal, matrix params, encoded dots, case toggle) and inject rewrite/override headers (X-Original-URL, X-Rewrite-URL, X-Forwarded-For) to desynchronise a fronting proxy's access-control matcher from the upstream router; off by default because it is an active probe against the routing/access-control layer")
 }
 
 func resetScanFlags() {
@@ -154,6 +157,7 @@ func resetScanFlags() {
 	scanMassAssign = false
 	scanXXE = false
 	scanGraphQL = false
+	scanForbidBypass = false
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -275,7 +279,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// derived from its representative sample's auth components.
 	attributionWarnings := attributeEndpoints(endpoints, matrix)
 
-	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate, scanJWTAttack, scanMassAssign, scanXXE, scanGraphQL)
+	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate, scanJWTAttack, scanMassAssign, scanXXE, scanGraphQL, scanForbidBypass)
 	if err != nil {
 		return err
 	}
@@ -1182,22 +1186,26 @@ func buildEvaluator(name string, matrix *model.RoleMatrix) (detect.Evaluator, er
 // the EnumerateID mutator when enumerateN > 0, enabling the JWTAuth
 // (--jwt-attack) mutator when jwtAttack is true, and enabling the
 // MassAssign (--mass-assign) mutator when massAssign is true, and enabling the
-// XXE (--xxe) mutator when xxe is true, and enabling the GraphQL (--graphql)
-// mutator when graphql is true. EnumerateID, JWTAuth, MassAssign, XXE, and
-// GraphQL are always registered but inert in their disabled state, so the
-// canonical DefaultRegistry order (and the order test) stays unchanged.
-func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, xxe, graphql bool) (*mutate.Registry, error) {
+// XXE (--xxe) mutator when xxe is true, enabling the GraphQL (--graphql)
+// mutator when graphql is true, and enabling the ForbiddenBypass
+// (--forbidden-bypass) mutator when forbidBypass is true. EnumerateID, JWTAuth,
+// MassAssign, XXE, GraphQL, and ForbiddenBypass are always registered but inert
+// in their disabled state, so the canonical DefaultRegistry order (and the
+// order test) stays unchanged.
+func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, xxe, graphql, forbidBypass bool) (*mutate.Registry, error) {
 	enumMutator := mutate.EnumerateID{N: enumerateN}
 	jwtAuthMutator := mutate.JWTAuth{Enabled: jwtAttack}
 	massAssignMutator := mutate.MassAssign{Enabled: massAssign}
 	xxeMutator := mutate.XXE{Enabled: xxe}
 	graphqlMutator := mutate.GraphQL{Enabled: graphql}
+	forbidMutator := mutate.ForbiddenBypass{Enabled: forbidBypass}
 
 	if wordlistPath == "" {
 		// Extend the default registry with EnumerateID + JWTAuth +
-		// MassAssign + XXE + GraphQL (all no-op in their disabled state).
+		// MassAssign + XXE + GraphQL + ForbiddenBypass (all no-op in their
+		// disabled state).
 		base := mutate.DefaultRegistry()
-		all := append(base.All(), enumMutator, jwtAuthMutator, massAssignMutator, xxeMutator, graphqlMutator)
+		all := append(base.All(), enumMutator, jwtAuthMutator, massAssignMutator, xxeMutator, graphqlMutator, forbidMutator)
 		return mutate.NewRegistry(all...), nil
 	}
 	data, err := os.ReadFile(wordlistPath)
@@ -1229,6 +1237,7 @@ func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, x
 		massAssignMutator,
 		xxeMutator,
 		graphqlMutator,
+		forbidMutator,
 	), nil
 }
 

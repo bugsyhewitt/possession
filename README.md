@@ -335,6 +335,46 @@ against the GraphQL layer, so they only fire when you opt in. Non-GraphQL
 bodies (plain JSON without a `query` field, form-encoded, XML, empty) produce
 no variants.
 
+## Forbidden-response bypass (`--forbidden-bypass`)
+
+The identity/object/property mutators all change *something the caller sends*.
+`--forbidden-bypass` attacks *the access-control layer itself*: the case where
+the caller's own credentials are correctly rejected for a protected resource
+(the endpoint returns 401/403 or a deny redirect), and you want to know whether
+that decision can be circumvented by **reshaping the request without changing
+identity**. This is the canonical "4xx bypass" technique — every variant keeps
+the caller's own credentials (it is emphatically *not* an identity swap; the
+bug is "the same rejected caller slips past the gate").
+
+```bash
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --forbidden-bypass
+```
+
+Authorization is frequently enforced by a fronting proxy / API gateway / WAF or
+by a path-prefix rule in the app, and that layer can be desynchronised from the
+upstream router. possession emits two families of variant, each as a separate
+finding so a confirmed bypass is attributable to the precise reshape that
+worked:
+
+| Family | Techniques | Idea |
+|--------|------------|------|
+| Path mutation | `trailing-slash` (`/admin` → `/admin/`), `double-leading-slash` (`//admin`), `dot-segment` (`/./admin`), `matrix-param` (`/admin;a=b`), `traversal-semicolon` (`/admin/..;/admin`), `encoded-trailing-dot` (`/admin%2e`), `case-toggle` (`/Admin`) | An equivalent-but-different path encoding the access-control matcher compares literally (and lets through) while the application router still resolves it to the protected handler. The `%2e` payload is emitted single-encoded on the wire (never double-encoded). |
+| Rewrite/override headers | `X-Original-URL`, `X-Rewrite-URL` (set to the request path), `X-Forwarded-For: 127.0.0.1` | A reverse proxy enforces access control on the request line but then honours a header-supplied URL/host (or trusts a localhost source IP) when handing the request to the backend. |
+
+Detection rides the existing comparative ladder unchanged: the caller's own
+baseline against the unmutated, protected endpoint is (expected to be) a denial;
+a variant that returns an owner-shaped 2xx where the baseline was denied is the
+bypass. Findings are class `authz-bypass` (ASVS V8.3.1 / V8.2.1, severity
+**HIGH**).
+
+`--forbidden-bypass` is **off by default**: the path-mutation and
+header-injection payloads are active probes against the routing/access-control
+layer (and the rewrite-header variants can reach internal-only paths on a
+misconfigured proxy), so they only fire when you opt in. Requests with no URL
+path produce no path variants.
+
 ## Role matrix
 
 The role matrix is YAML. Minimum viable shape:
