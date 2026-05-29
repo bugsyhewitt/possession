@@ -52,6 +52,7 @@ var (
 	scanLearnMarkers    bool   // --learn-markers: harvest per-identity markers from owner baselines (off by default)
 	scanRecord          string // --record <dir>: persist every variant+baseline response to disk (off by default)
 	scanReplay          string // --replay <dir>: re-run detection over a saved recording, firing no requests (off by default)
+	scanResume          string // --resume <dir>: checkpoint responses incrementally; on re-run, skip already-completed variants (off by default)
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -107,6 +108,8 @@ func init() {
 		"persist every variant+baseline request/response from this scan to <dir>/recording.json so detection can be re-run offline with --replay (decouples the rate-limited network phase from detection tuning)")
 	scanCmd.Flags().StringVar(&scanReplay, "replay", "",
 		"re-run detection over a recording previously written by --record <dir>; fires NO network requests, letting you tune thresholds/evaluators against a target you only had permission to hit once (mutually exclusive with --record)")
+	scanCmd.Flags().StringVar(&scanResume, "resume", "",
+		"checkpoint every completed response to <dir>/checkpoint.jsonl as the scan runs; on a re-run with the same --resume <dir>, already-completed variants are skipped and only the remaining requests are fired (survives Ctrl-C, network drops, and quota walls; mutually exclusive with --replay)")
 }
 
 func resetScanFlags() {
@@ -134,6 +137,7 @@ func resetScanFlags() {
 	scanLearnMarkers = false
 	scanRecord = ""
 	scanReplay = ""
+	scanResume = ""
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -151,6 +155,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 	if scanReplay != "" && scanDryRun {
 		return fmt.Errorf("scan: --replay and --dry-run are mutually exclusive (replay produces findings, dry-run prints the plan)")
+	}
+	if scanResume != "" && scanReplay != "" {
+		return fmt.Errorf("scan: --resume and --replay are mutually exclusive (replay fires no requests, so there is nothing to resume)")
 	}
 	input := args[0]
 
@@ -305,8 +312,37 @@ func runScan(cmd *cobra.Command, args []string) error {
 		defer cancel()
 		engine.PrepareRefresh(ctx, matrix)
 		engine.PrepareFlows(ctx, matrix)
-		baselineResponses = engine.Run(ctx, baselinePlan)
-		responses = engine.Run(ctx, plan)
+
+		// --resume: load any prior checkpoint, attach an incremental writer so
+		// every newly-completed response is persisted as it lands, and fire
+		// only the variants not already recorded. A run with no prior
+		// checkpoint behaves exactly like a normal scan that happens to be
+		// writing one. (ROADMAP v1.1 "resume on interrupt".)
+		if scanResume != "" {
+			loaded, lerr := record.LoadCheckpoint(scanResume)
+			if lerr != nil {
+				return fmt.Errorf("scan: %w", lerr)
+			}
+			ckpt, cerr := record.OpenCheckpoint(scanResume)
+			if cerr != nil {
+				return fmt.Errorf("scan: %w", cerr)
+			}
+			defer ckpt.Close()
+			engine.OnResponse = func(r model.Response, baseline bool) {
+				ckpt.Record(r, baseline)
+			}
+			nb, nv := loaded.Counts()
+			if nb+nv > 0 {
+				fmt.Fprintf(stderr,
+					"--resume: recovered %d baseline + %d variant response(s) from %s; firing only the remainder\n",
+					nb, nv, scanResume)
+			}
+			baselineResponses = runResumable(ctx, engine, baselinePlan, loaded.Baseline, true)
+			responses = runResumable(ctx, engine, plan, loaded.Variants, false)
+		} else {
+			baselineResponses = engine.Run(ctx, baselinePlan)
+			responses = engine.Run(ctx, plan)
+		}
 	}
 	end := time.Now()
 
@@ -703,6 +739,44 @@ func buildBaselinePlan(endpoints []*model.Endpoint, samples int) replay.Plan {
 	}
 	plan.TotalBefore = len(plan.Variants)
 	return plan
+}
+
+// runResumable fires a plan while honouring a previously-checkpointed set of
+// responses (ROADMAP v1.1 "resume on interrupt"). Variants whose deterministic
+// ID is already present in done are taken straight from the checkpoint and not
+// re-fired; the rest are sent to the engine as a sub-plan. The two are merged
+// back into plan order so detection sees the same index-for-index alignment it
+// would have seen on an uninterrupted run.
+//
+// The engine's OnResponse hook (set by the caller) persists each freshly-fired
+// response, so an interrupt during this call leaves the checkpoint richer than
+// before and a subsequent resume picks up exactly where this one stopped.
+func runResumable(ctx context.Context, engine *replay.Engine, plan replay.Plan, done map[string]model.Response, baseline bool) []model.Response {
+	out := make([]model.Response, len(plan.Variants))
+	sub := replay.Plan{}
+	subIdx := make([]int, 0, len(plan.Variants)) // sub-plan position → original index
+	for i := range plan.Variants {
+		id := plan.Variants[i].ID
+		if r, ok := done[id]; ok {
+			// Ensure the recovered response carries its ID even if an older
+			// checkpoint omitted it, so downstream keying stays consistent.
+			if r.VariantID == "" {
+				r.VariantID = id
+			}
+			out[i] = r
+			continue
+		}
+		sub.Variants = append(sub.Variants, plan.Variants[i])
+		subIdx = append(subIdx, i)
+	}
+	if len(sub.Variants) == 0 {
+		return out
+	}
+	fired := engine.RunWithKind(ctx, sub, baseline)
+	for j, r := range fired {
+		out[subIdx[j]] = r
+	}
+	return out
 }
 
 // variantIDs returns the variant IDs of a plan in plan order. These are the

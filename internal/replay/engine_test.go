@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -246,5 +247,62 @@ func TestParseRetryAfter(t *testing.T) {
 	}
 	if _, ok := parseRetryAfter("garbage"); ok {
 		t.Error("garbage should fail")
+	}
+}
+
+// TestEngine_OnResponseHook verifies the OnResponse hook fires once per
+// completed response with the correct baseline flag, and that RunWithKind
+// returns the same plan-ordered slice as Run regardless of the hook. This is
+// the seam that resume-on-interrupt uses to checkpoint responses as they land.
+func TestEngine_OnResponseHook(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, `{"ok":true}`)
+	}))
+	defer srv.Close()
+
+	e, _ := newTestEngine(t, model.RunSettings{})
+
+	var mu sync.Mutex
+	seen := map[string]bool{}   // VariantID → baseline flag observed
+	var calls atomic.Int64
+	e.OnResponse = func(resp model.Response, baseline bool) {
+		calls.Add(1)
+		mu.Lock()
+		seen[resp.VariantID] = baseline
+		mu.Unlock()
+	}
+
+	plan := Plan{Variants: []model.Variant{
+		mkVariant("v1", "GET", srv.URL+"/a", nil),
+		mkVariant("v2", "GET", srv.URL+"/b", nil),
+	}}
+	res := e.RunWithKind(context.Background(), plan, true)
+
+	if len(res) != 2 || res[0].VariantID != "v1" || res[1].VariantID != "v2" {
+		t.Fatalf("plan order not preserved: %+v", res)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("OnResponse should fire once per variant; got %d calls", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !seen["v1"] || !seen["v2"] {
+		t.Errorf("baseline flag not propagated to hook: %+v", seen)
+	}
+}
+
+// TestEngine_NilOnResponse_NoPanic confirms a nil hook is a no-op (the default
+// path for every non-resume scan).
+func TestEngine_NilOnResponse_NoPanic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, `{}`)
+	}))
+	defer srv.Close()
+	e, _ := newTestEngine(t, model.RunSettings{})
+	res := e.RunWithKind(context.Background(), Plan{Variants: []model.Variant{
+		mkVariant("v1", "GET", srv.URL+"/x", nil),
+	}}, false)
+	if len(res) != 1 || res[0].Status != 200 {
+		t.Fatalf("nil hook altered behaviour: %+v", res)
 	}
 }

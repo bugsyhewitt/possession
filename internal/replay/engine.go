@@ -45,6 +45,14 @@ type Engine struct {
 	UserAgent   string
 	Stderr      io.Writer
 
+	// OnResponse, when non-nil, is invoked exactly once for each completed
+	// response as soon as it is collected (ROADMAP v1.1 "resume on
+	// interrupt"). It runs on worker goroutines and may be called
+	// concurrently, so an implementation must be safe for concurrent use.
+	// Run still returns the full plan-ordered slice regardless; the hook is
+	// purely additive so a nil hook preserves the previous behaviour exactly.
+	OnResponse func(resp model.Response, baseline bool)
+
 	// refresh caches per-identity refresh results so each identity's hook
 	// fires at most once per scan (4.4).
 	mu      sync.Mutex
@@ -374,7 +382,19 @@ func applyIdentityToRequest(req *http.Request, ident *model.Identity) {
 // position. Bounded concurrency per Engine.Concurrency; results are
 // re-sorted into plan order before return so the output is deterministic
 // regardless of which worker finished first.
+//
+// Run treats the plan as a variant plan for the OnResponse hook. Use
+// RunWithKind to fire a baseline plan so checkpointed responses are routed to
+// the baseline set.
 func (e *Engine) Run(ctx context.Context, plan Plan) []model.Response {
+	return e.RunWithKind(ctx, plan, false)
+}
+
+// RunWithKind is Run with an explicit baseline flag for the OnResponse hook.
+// baseline=true marks every completed response as an owner-baseline response so
+// resume checkpointing can route it to the baseline set; the network behaviour
+// is identical to Run.
+func (e *Engine) RunWithKind(ctx context.Context, plan Plan, baseline bool) []model.Response {
 	type job struct {
 		idx int
 		v   model.Variant
@@ -388,7 +408,11 @@ func (e *Engine) Run(ctx context.Context, plan Plan) []model.Response {
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
-				out[j.idx] = e.fire(ctx, j.v)
+				r := e.fire(ctx, j.v)
+				out[j.idx] = r
+				if e.OnResponse != nil {
+					e.OnResponse(r, baseline)
+				}
 			}
 		}()
 	}

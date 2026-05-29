@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Resume on interrupt** (`--resume <dir>`, `internal/record/checkpoint.go`):
+  a scan can now survive interruption — Ctrl-C, a dropped connection, a quota
+  wall, a host reboot — without discarding the requests it already fired. Every
+  completed baseline and variant response is checkpointed to an append-only
+  `<dir>/checkpoint.jsonl` as it lands (one JSON object per line, flushed
+  immediately). Re-running with the same `--resume <dir>` loads the checkpoint,
+  skips every variant whose deterministic ID is already recorded, and fires only
+  the remainder. Append-only JSON Lines is crash-safe by construction: a crash
+  mid-write can at worst leave a torn final line, which is skipped on reload
+  (that one variant is simply re-fired), so a checkpoint never poisons a resume.
+  Because responses are keyed by variant ID and merged back into plan order, a
+  resumed-then-completed scan feeds detection byte-for-byte identical inputs to
+  an uninterrupted run. Implemented as an opt-in `Engine.OnResponse` hook fired
+  per completed response (nil hook ⇒ previous behaviour exactly), plus a
+  `RunWithKind` variant of `Engine.Run` that tags responses baseline-vs-variant.
+  Mutually exclusive with `--replay` (replay fires nothing, so there is nothing
+  to resume); composes with `--record`. (ROADMAP v1.1: "resume on interrupt".)
+
 - **mitmproxy JSON input parser** (`internal/parse/mitmproxy.go`): `scan` and
   `parse` now accept a [mitmproxy](https://mitmproxy.org) JSON flow dump as a
   fifth input format (`--format mitmproxy`) alongside HAR, curl, OpenAPI 3.x,
