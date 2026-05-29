@@ -11,6 +11,25 @@ The single largest finding: possession swaps **identities** (replay alice's requ
 
 ---
 
+## Item 0 — Mass-assignment / BOPLA mutator (`mass-assign`) — ✅ IMPLEMENTED (r17)
+
+Shipped behind `--mass-assign`. Completes the third axis of an authz test: where
+`swap-identity` attacks *who* the caller is and `swap-object` attacks *which
+object* is referenced, `mass-assign` attacks *which properties* the caller may
+set — Broken Object Property Level Authorization (OWASP API #3 / mass
+assignment). For every captured request with a JSON **object** body, it keeps
+the caller's own credentials and emits one variant per privileged property
+(`admin`, `is_admin`, `isAdmin`, `role:admin`, `roles:[admin]`, `verified`),
+*adding* a field the client should not be permitted to set. Properties the
+request already sets are skipped (case-insensitive). Pure/deterministic like
+every mutator (properties applied in sorted order); off by default because the
+variants are write-shaped and mutate server state. Findings are class `privesc`,
+severity HIGH. Requests without a JSON object body (GET, form-encoded, JSON
+arrays, empty bodies) produce no variants. See `internal/mutate/mass_assign.go`
+and `buildRegistry` in `internal/cli/scan.go`.
+
+---
+
 ## Item 1 — Resource-reference swap mutator (`swap-object`) (Priority: CRITICAL)
 
 ### What
