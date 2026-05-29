@@ -670,6 +670,61 @@ it only fires when you opt in — mirroring the gating of `--cookie-tampering`,
 `--host-header`, `--forbidden-bypass`, `--method-override`, `--csrf-header`,
 `--ws-hijack`, `--xxe`, and `--mass-assign`.
 
+## HTTP Parameter Pollution (`--parameter-pollution`)
+
+Where `--swap-object` *replaces* a reference value and `--method-override`
+attacks *which verb the gate evaluates*, `--parameter-pollution` attacks *which
+copy of a duplicated parameter each layer of the stack reads*. The classic HPP
+broken-access-control pattern: a request carries the same parameter name more
+than once, and two components disagree on which occurrence is authoritative. A
+fronting WAF / API gateway typically reads the **first** occurrence (or
+concatenates), while the application framework reads a **different** one (PHP and
+ASP.NET take the last; some Java stacks take the first; Express/Rails build an
+array). By supplying the original (gate-passing) value once and an
+attacker-chosen value in a second occurrence, an unsanitised or
+privilege-altering value slips past the gate. The bug being tested is *"the same
+caller slips a value past the gate because the WAF and the app read different
+copies of the parameter."*
+
+Every variant keeps the **caller's own credentials** (no identity swap — the
+caller stays themselves; they merely duplicate a parameter the stack
+mis-parses):
+
+```bash
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --parameter-pollution
+```
+
+| Technique | What it sends |
+|-----------|---------------|
+| `query-pollute:append` | For each query parameter, a duplicate occurrence carrying the tamper value placed **after** the original (`?role=user&role=admin`). Exploits last-wins parsers (PHP, ASP.NET) while a first-wins gate still reads the original. One variant per parameter for attribution. |
+| `query-pollute:prepend` | The same duplicate placed **before** the original (`?role=admin&role=user`). Exploits first-wins parsers while a last-wins gate still reads the original. One variant per parameter. |
+| `body-pollute:append` / `body-pollute:prepend` | The identical duplication applied to an `application/x-www-form-urlencoded` request body — the second-most-common HPP surface. Two variants per body parameter. |
+
+The original occurrence is **always preserved**, so a gate that reads the value
+it expects still passes — the bypass rides entirely on the layer disagreement.
+The injected tamper value defaults to the privilege-suggestive token `admin`. The
+mutator is deliberately **disjoint** from `--swap-object`: swap-object
+*substitutes* a value (one occurrence, changed); parameter-pollution
+*duplicates* it (two occurrences, original retained). JSON and multipart bodies
+are left untouched — duplicate keys there do not exhibit the cross-layer
+disagreement HPP relies on.
+
+Detection rides the **existing comparative ladder** unchanged: the caller's own
+baseline against the un-polluted request is the reference; a variant that gains
+owner-shaped access where the baseline did not is the bypass (class
+`authz-bypass`, ASVS V8.3.x). Like every mutator it is pure and deterministic —
+parameters are processed in sorted name order and the two orderings emit in a
+fixed sequence — so `--dry-run` and the offline corpus cover it for free.
+
+`--parameter-pollution` is **off by default**: the polluted variants re-issue
+requests with altered parameter values that can reach mutating handlers, so it
+only fires when you opt in — mirroring the gating of `--header-injection`,
+`--cookie-tampering`, `--host-header`, `--forbidden-bypass`,
+`--method-override`, `--csrf-header`, `--ws-hijack`, `--xxe`, and
+`--mass-assign`.
+
 ## Role matrix
 
 The role matrix is YAML. Minimum viable shape:

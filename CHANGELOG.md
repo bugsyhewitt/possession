@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **HTTP Parameter Pollution mutator** (`--parameter-pollution`,
+  `internal/mutate/param_pollution.go`): a new mutator in the access-control
+  bypass family. Where `--swap-object` *replaces* a reference value and
+  `--method-override` attacks *which verb the gate evaluates*,
+  `--parameter-pollution` attacks *which copy of a duplicated parameter each
+  layer of the stack reads* — the canonical HPP family. A request that carries
+  the same parameter name twice can be parsed differently by a fronting WAF /
+  API gateway (typically first-occurrence or concatenated) and the application
+  framework (PHP / ASP.NET take the last, some Java stacks the first); by
+  supplying the original gate-passing value once and an attacker-chosen value in
+  a second occurrence, an unsanitised / privilege-altering value slips past the
+  gate. Every variant keeps the caller's own credentials (no identity swap —
+  they merely duplicate a parameter the stack mis-parses). Two surfaces, each
+  emitted in two orderings for deterministic attribution: query-pollute
+  (duplicate each query parameter, the tamper value once appended after the
+  original and once prepended before it) and body-pollute (the same duplication
+  applied to `application/x-www-form-urlencoded` bodies). The original
+  occurrence is always preserved so a gate reading the expected value still
+  passes; the injected tamper value defaults to `admin` and is configurable.
+  Deliberately disjoint from `--swap-object` (which substitutes, not
+  duplicates); JSON and multipart bodies are left untouched. Detection rides
+  the existing comparative ladder unchanged: a variant that gains owner-shaped
+  access where the caller's un-polluted baseline did not is the bypass (class
+  `authz-bypass`, ASVS V8.3.x). Pure and deterministic — parameters processed
+  in sorted name order, orderings in a fixed sequence — so `--dry-run` and the
+  offline corpus cover it for free. **Off by default**: the polluted variants
+  re-issue requests with altered parameter values that can reach mutating
+  handlers, so it only fires when the operator opts in, mirroring the gating of
+  `--header-injection`, `--cookie-tampering`, `--host-header`,
+  `--forbidden-bypass`, `--method-override`, `--csrf-header`, `--ws-hijack`,
+  `--xxe`, and `--mass-assign`.
 - **Trusted-header injection mutator** (`--header-injection`,
   `internal/mutate/header_injection.go`): a new mutator in the access-control
   bypass family. Where `--host-header` attacks *which host the access-control
