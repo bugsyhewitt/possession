@@ -432,6 +432,75 @@ func TestLadder_GraphQL_DeniedStatusNotBypass(t *testing.T) {
 	}
 }
 
+// wsVR builds a VariantResponse for a --ws-hijack variant. technique is the
+// ws-hijack detail value (strip-auth or swap-identity); status is the response
+// status the (mock) server returned to the upgrade handshake.
+func wsVR(technique string, status int, errStr string) VariantResponse {
+	return VariantResponse{
+		Variant: &model.Variant{
+			ID: "v-ws",
+			Mutation: model.Mutation{
+				Type:   "ws-hijack",
+				Class:  "authn-bypass",
+				Detail: map[string]string{"ws-hijack": technique, "technique": technique},
+			},
+		},
+		Response: &model.Response{Status: status, Err: errStr},
+	}
+}
+
+// WS-hijack branch: a 101 Switching Protocols to a stripped identity ⇒ decisive
+// WebSocket authz bypass. Note: 101 < 200 would normally be StatusError, so
+// this proves the ws-hijack branch runs ahead of the StatusError short-circuit.
+func TestLadder_WSHijack_HandshakeCompletedIsBypass(t *testing.T) {
+	cal := mkCal(``, 200, false, false, false, 0.85)
+	vv := runLadder(t, cal, nil, wsVR("strip-auth", 101, ""))
+	if vv.Verdict != VerdictBypass {
+		t.Fatalf("want bypass, got %s notes=%v", vv.Verdict, vv.Notes)
+	}
+	if vv.Confidence != WSHandshakeConfidence {
+		t.Errorf("want confidence %v got %v", WSHandshakeConfidence, vv.Confidence)
+	}
+	if !anyNoteContains(vv.Notes, "ws-hijack") {
+		t.Errorf("expected a ws-hijack note; got %v", vv.Notes)
+	}
+}
+
+// WS-hijack branch: a non-101 response (e.g. 401) means the handshake did not
+// complete under the modified identity ⇒ enforced, and the body ladder is NOT
+// consulted (a handshake has no comparable body).
+func TestLadder_WSHijack_NonHandshakeIsEnforced(t *testing.T) {
+	cal := mkCal(``, 200, false, false, false, 0.85)
+	vv := runLadder(t, cal, nil, wsVR("strip-auth", 401, ""))
+	if vv.Verdict != VerdictEnforced {
+		t.Fatalf("non-101 must be enforced, got %s notes=%v", vv.Verdict, vv.Notes)
+	}
+	if !anyNoteContains(vv.Notes, "ws-hijack") {
+		t.Errorf("expected a ws-hijack note; got %v", vv.Notes)
+	}
+}
+
+// WS-hijack branch: a transport error is not a completed handshake ⇒ enforced
+// via the ws-hijack branch (not the generic StatusError inconclusive path),
+// because the ws-hijack branch owns every ws-hijack variant's verdict.
+func TestLadder_WSHijack_TransportErrorIsEnforced(t *testing.T) {
+	cal := mkCal(``, 200, false, false, false, 0.85)
+	vv := runLadder(t, cal, nil, wsVR("swap-identity", 0, "connection refused"))
+	if vv.Verdict != VerdictEnforced {
+		t.Fatalf("transport error must be enforced for ws-hijack, got %s", vv.Verdict)
+	}
+}
+
+// A 200 OK (not a handshake) is also treated as enforced: the server answered
+// the request normally without upgrading the connection.
+func TestLadder_WSHijack_Plain200IsEnforced(t *testing.T) {
+	cal := mkCal(``, 200, false, false, false, 0.85)
+	vv := runLadder(t, cal, nil, wsVR("strip-auth", 200, ""))
+	if vv.Verdict != VerdictEnforced {
+		t.Fatalf("plain 200 (no upgrade) must be enforced, got %s", vv.Verdict)
+	}
+}
+
 // anyNoteContains reports whether any note contains the substring.
 func anyNoteContains(notes []string, sub string) bool {
 	for _, n := range notes {

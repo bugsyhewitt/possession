@@ -408,6 +408,47 @@ layer (and the rewrite-header variants can reach internal-only paths on a
 misconfigured proxy), so they only fire when you opt in. Requests with no URL
 path produce no path variants.
 
+## WebSocket upgrade hijack (`--ws-hijack`)
+
+Every mutator above operates on ordinary HTTP request/response pairs.
+`--ws-hijack` targets the one request applications most often forget to
+authorize: the **HTTP → WebSocket upgrade handshake**. WebSocket endpoints are
+frequently mounted behind a handshake that treats the upgrade as a transport
+concern rather than a resource access, so the per-route authorization the REST
+layer enforces is silently skipped — any caller who can reach the endpoint can
+open a live channel they should not be able to.
+
+possession recognizes a captured upgrade handshake by its RFC 6455 headers
+(`Upgrade: websocket` + a `Connection` value containing `upgrade`, or the
+presence of a `Sec-WebSocket-Key` header) and, **preserving those upgrade
+headers**, replays it under modified identities:
+
+```bash
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --ws-hijack
+```
+
+| Technique | What it sends | Idea |
+|-----------|---------------|------|
+| `strip-auth` | The handshake with **all credentials removed** (anonymous). | A `101 Switching Protocols` here means the WebSocket accepts unauthenticated clients (class `authn-bypass`). |
+| `swap-identity` | One variant per matrix identity, carrying **that identity's credentials** in place of the caller's. | A `101` to an identity that should not reach this channel is a WebSocket authorization bypass (class `idor`, or `idor-cross-tenant` when the swapped identity's tenant differs from the captured owner's). |
+
+Detection sits **outside the comparative ladder**: a WebSocket handshake has no
+meaningful response body to diff, so the decisive, false-positive-free signal is
+the response status. A `101 Switching Protocols` returned to a stripped or
+swapped identity means the server completed the upgrade without enforcing
+authorization ⇒ **bypass** (near-certain confidence). Any non-101 response
+(including 401/403, a transport error, or a normal 200) means the handshake did
+not complete under the modified identity ⇒ **enforced**. Because `101` is below
+the 2xx success band, this branch runs ahead of the usual transport-error
+short-circuit so a handshake success is never swallowed as an error.
+
+`--ws-hijack` is **off by default**: attempting to open (or upgrade to) a live
+WebSocket channel under a foreign or stripped identity is an active
+access-control probe, so it only fires when you opt in. Requests that are not
+WebSocket upgrade handshakes produce no variants.
+
 ## Role matrix
 
 The role matrix is YAML. Minimum viable shape:

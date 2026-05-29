@@ -108,6 +108,43 @@ func (ev ComparativeEvaluator) judge(vr VariantResponse, owner *model.Identity, 
 		return vv
 	}
 
+	// WebSocket upgrade branch (--ws-hijack): a ws-hijack variant stripped or
+	// swapped the caller's credentials while preserving the WebSocket upgrade
+	// headers, then watches for the server completing the handshake. A response
+	// status of 101 Switching Protocols means the server agreed to open a live
+	// WebSocket channel for a caller whose authorization it did not enforce ⇒
+	// WebSocket authz bypass. This is decisive and false-positive-free (a 101
+	// never appears unless the server upgraded the connection), and it has no
+	// owner/actor body baseline to compare against, so it short-circuits the
+	// comparative ladder.
+	//
+	// This branch MUST run ahead of the StatusError short-circuit below:
+	// ClassifyStatus treats status < 200 (which includes 101) as StatusError,
+	// so a handshake success would otherwise be swallowed as a transport error.
+	if v != nil && v.Mutation.Detail["ws-hijack"] != "" {
+		if r != nil && r.Err == "" && r.Status == 101 {
+			vv.Verdict = VerdictBypass
+			vv.Confidence = WSHandshakeConfidence
+			vv.Notes = append(vv.Notes,
+				"ws-hijack: server returned 101 Switching Protocols to a stripped/swapped identity ⇒ WebSocket upgrade completed without enforcing authorization")
+			return vv
+		}
+		// Any non-101 response (denied, error, or a normal status) means the
+		// handshake did not complete under the modified identity. Treat it as
+		// enforced — the WebSocket access check held. We do not fall through to
+		// the body-similarity ladder: a handshake has no meaningful body to
+		// compare, and the absence of a 101 is itself the enforced signal.
+		vv.Verdict = VerdictEnforced
+		vv.Confidence = 0
+		status := 0
+		if r != nil {
+			status = r.Status
+		}
+		vv.Notes = append(vv.Notes,
+			fmt.Sprintf("ws-hijack: status %d (not 101) ⇒ WebSocket upgrade not completed under modified identity ⇒ enforced", status))
+		return vv
+	}
+
 	// Compute statusClass and the body signals.
 	sc := ClassifyStatus(r)
 

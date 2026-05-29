@@ -84,6 +84,14 @@ const (
 	// type-system identifiers that only appear when the schema is walked.
 	GraphQLIntrospectionConfidence = 0.95
 
+	// WSHandshakeConfidence is the (near-certain) confidence for a WebSocket
+	// upgrade authorization bypass: a --ws-hijack variant stripped or swapped
+	// the caller's credentials and the server still answered 101 Switching
+	// Protocols, completing the handshake. A 101 to a stripped/foreign identity
+	// is decisive and false-positive-free — the server agreed to open a live
+	// WebSocket channel for a caller whose authorization it did not check.
+	WSHandshakeConfidence = 0.95
+
 	// AmbiguousPenalty multiplies the final confidence when the
 	// underlying status was 3xx (ambiguous). 3xx responses get the
 	// benefit of doubt but not full credit.
@@ -341,6 +349,12 @@ func MutatorClass(mutatorType string) string {
 		return "xxe-injection"
 	case "graphql":
 		return "graphql-exposure"
+	case "ws-hijack":
+		// Fallback only; the mutator sets the per-variant class (authn-bypass
+		// for the anonymous strip-auth handshake, idor / idor-cross-tenant for
+		// cross-identity handshakes). The strip-auth technique is the most
+		// common shape, so default to authn-bypass.
+		return "authn-bypass"
 	case "drop-cookie", "strip-token":
 		return "auth-dependency"
 	case "jwt-alg-none", "jwt-sig-strip", "jwt-resign-weak-key":

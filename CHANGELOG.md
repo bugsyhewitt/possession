@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **WebSocket upgrade hijack mutator** (`--ws-hijack`,
+  `internal/mutate/ws_hijack.go`): a new mutator that attacks the one request
+  applications most often forget to authorize — the HTTP → WebSocket upgrade
+  handshake. WebSocket endpoints are frequently mounted behind a handshake that
+  skips the per-route authorization the REST layer enforces, so any caller who
+  can reach the endpoint can open a live channel. For every captured request
+  recognized as a WebSocket handshake (by its RFC 6455 headers — `Upgrade:
+  websocket` + a `Connection` value containing `upgrade`, or a
+  `Sec-WebSocket-Key` header), it replays the handshake — **preserving the
+  upgrade headers** — under modified identities: a `strip-auth` variant with all
+  credentials removed (anonymous upgrade, class `authn-bypass`) and one
+  `swap-identity` variant per matrix identity carrying that identity's
+  credentials (class `idor`, or `idor-cross-tenant` when the swapped identity's
+  tenant differs from the captured owner's). Detection sits outside the
+  comparative ladder: a handshake has no comparable response body, so the
+  decisive, false-positive-free signal is a `101 Switching Protocols` response —
+  a 101 to a stripped/swapped identity means the server completed the upgrade
+  without enforcing authorization (a new evaluator branch, near-certain
+  confidence). Any non-101 response (401/403, transport error, or a normal 200)
+  is enforced. The branch runs ahead of the transport-error short-circuit so a
+  `101` (which is below the 2xx band) is never swallowed as an error. Pure and
+  deterministic like every mutator (strip-auth first, then identities in
+  canonical rank,name order). **Off by default**: opening a live channel under a
+  foreign/stripped identity is an active access-control probe, so it only fires
+  via `--ws-hijack`. Non-handshake requests produce no variants.
+
 - **Burp Suite XML input parser** (`--format burp`, `internal/parse/burp.go`):
   a sixth capture format alongside HAR/curl/OpenAPI/Postman/mitmproxy. possession
   positions itself as the standalone alternative to Burp Autorize, but most
