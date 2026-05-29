@@ -106,6 +106,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `openapi`/`swagger` content-key auto-detection that disambiguates OpenAPI JSON
   from HAR JSON). Synthesized endpoints feed every existing mutator unchanged.
 
+### Fixed
+
+- **Data race in `TestScanRecordThenReplay_RoundTrip`** (`internal/cli/
+  scan_record_test.go`): the end-to-end record/replay test counted server hits
+  with a plain `int` mutated from the `httptest.Server`'s per-connection
+  goroutines while the test goroutine read it — and possession's replay engine
+  fans variants out across `concurrency` goroutines, so the handler ran
+  concurrently. `go test ./... -race` (the CI gate and `make test`) reported a
+  `DATA RACE` and failed the whole `internal/cli` package. The counter is now a
+  `sync/atomic.Int64`, making the increments and the three reads race-free; the
+  full suite passes cleanly under `-race`. Test-only change — no production code,
+  behaviour, or public surface affected.
+
 ## [1.1.0] — 2026-05-18
 
 Four packets shipped in the v1.1 autonomous run. Plus one integration
