@@ -570,6 +570,54 @@ proxy, so it only fires when you opt in — mirroring the gating of
 `--forbidden-bypass`, `--method-override`, `--csrf-header`, `--ws-hijack`,
 `--xxe`, and `--mass-assign`.
 
+## Cookie-value privilege tampering (`--cookie-tampering`)
+
+Where `--host-header` attacks *which host the access-control layer trusts*,
+`--cookie-tampering` attacks *which authorization state the app trusts inside a
+cookie it set*. The classic broken-access-control / privilege-escalation pattern:
+a server stores a client-readable authorization claim in a cookie value — a
+`role=user` cookie it reads back to decide privilege, an `admin=0` flag, an
+`is_admin=false` claim, or a base64-wrapped (unsigned) blob carrying the same —
+and trusts it on the next request without re-deriving or signing it. The bug
+being tested is *"the same caller gains privilege by editing a claim in their own
+cookie."*
+
+Where `--drop-cookie` *removes* an auth cookie and `--strip-token` strips the
+bearer/CSRF side of the credential pair, `--cookie-tampering` keeps every cookie
+present and instead **flips one privilege claim** inside an auth cookie's value
+from its unprivileged form to its privileged one. Every variant keeps the
+**caller's own credentials** (no identity swap):
+
+```bash
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --cookie-tampering
+```
+
+| Technique | What it sends |
+|-----------|---------------|
+| `value-claim-flip:<cookie>:<claim>` | The auth-cookie value is a delimited claim payload (`role=user;tier=free`, `admin=0`, `is_admin=false`). The matching claim is rewritten in place to its privileged form (`role=admin`, `admin=1`, `is_admin=true`), every other byte preserved. Matching is token-bounded (`role=user` flips; `role=username` does not) and case-insensitive on key and value, preserving the original key casing. |
+| `base64-claim-flip:<cookie>:<claim>` | The auth-cookie value base64-decodes (std / URL alphabet, padded or raw) to a printable string that itself carries such a claim. The decoded payload is flipped and **re-encoded in the same alphabet/padding** it arrived in, so a server that base64-decodes the cookie and trusts the inner claim is fooled. JWT-shaped values (three base64url segments with a JSON header) are left to the JWT mutators and skipped here. |
+
+The built-in claim set is small and high-signal — `role` (`user`/`guest` → `admin`),
+`admin` / `is_admin` / `isadmin` (`0`/`false` → `1`/`true`), and `verified`
+(`false` → `true`) — paralleling the privileged-property set `--mass-assign`
+injects, so the variant count stays bounded and the false-positive surface low.
+Non-printable / encrypted cookie blobs and values with no matching claim emit
+nothing.
+
+Detection rides the **existing comparative ladder** unchanged: the caller's own
+baseline against the untampered cookie is the reference; a variant that gains
+elevated/owner-shaped access where the baseline did not is the bypass (class
+`authz-bypass`, ASVS V8.3.x). Like every mutator it is pure and deterministic —
+cookies are processed in name-sorted order and claims in a fixed order — so
+`--dry-run` and the offline corpus cover it for free.
+
+`--cookie-tampering` is **off by default**: the flipped-claim variants actively
+assert elevated privilege against the access-control layer, so it only fires when
+you opt in — mirroring the gating of `--host-header`, `--forbidden-bypass`,
+`--method-override`, `--csrf-header`, `--ws-hijack`, `--xxe`, and `--mass-assign`.
+
 ## Role matrix
 
 The role matrix is YAML. Minimum viable shape:
