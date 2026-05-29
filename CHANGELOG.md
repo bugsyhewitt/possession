@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Statistical retry** (`--retry-inconclusive`, `internal/replay/retry.go`): a
+  scan can now re-issue each transiently-failed variant exactly once before
+  detection runs, so a flaky target's one-off failures stop masquerading as
+  inconclusive verdicts (and thus as findings you never see). A variant is
+  re-issued when its response is a transport error, a `429`, or any `5xx`; the
+  retry goes through the standard fire path (same rate limiter, concurrency,
+  refresh injections, body caps). A recovered retry replaces the failure; a
+  retry that fails again preserves the original response, so a flaky target can
+  never make a result worse than the first attempt. Refresh/flow setup failures
+  (`Inconclusive`) are deliberately not retried — a single variant re-issue
+  cannot repair a per-identity setup failure, so it would only burn a request.
+  Implemented as a pure `replay.IsTransientFailure` predicate plus an
+  `Engine.RetryInconclusive` method that fires a sub-plan of just the failures
+  and fires the `OnResponse` hook only for retries it keeps, so `--resume` and
+  `--record` capture the improved response. Off by default and rate-sensitive
+  (it costs extra requests against an already-struggling target); mutually
+  exclusive with `--replay` (which fires nothing to retry). (ROADMAP v1.1:
+  "statistical retry — re-issue inconclusive variants once before reporting".)
+
 - **Resume on interrupt** (`--resume <dir>`, `internal/record/checkpoint.go`):
   a scan can now survive interruption — Ctrl-C, a dropped connection, a quota
   wall, a host reboot — without discarding the requests it already fired. Every
