@@ -65,6 +65,7 @@ var (
 	scanCookieTamper    bool   // --cookie-tampering: flip a client-controllable privilege claim inside an auth cookie value (plaintext or base64) using the caller's own credentials (off by default)
 	scanHeaderInject    bool   // --header-injection: inject trusted-proxy headers (client-IP / identity assertions) the backend mis-trusts, using the caller's own credentials (off by default)
 	scanParamPollution  bool   // --parameter-pollution: duplicate query/form parameters (HPP) to exploit cross-layer parsing disagreement for access-control bypass, using the caller's own credentials (off by default)
+	scanOriginSpoof     bool   // --origin-spoof: spoof the Origin/Referer headers (null, cross-origin, suffix-confusion) to bypass origin-validation CSRF/state-change defenses, using the caller's own credentials (off by default)
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -146,6 +147,8 @@ func init() {
 		"test trusted-proxy header access-control bypass using the caller's own credentials: inject a trusted-client-IP header (X-Real-IP, X-Client-IP, X-Originating-IP, X-Remote-IP, X-Remote-Addr) set to the loopback so an IP-gated internal/admin rule treats the caller as inside the trust boundary, and inject a proxy-set identity-assertion header (X-Authenticated-User, X-Remote-User, X-Forwarded-User, X-User, X-WEBAUTH-USER) naming a privileged principal so a backend that trusts a forwarded identity grants elevated access; a request that succeeds under an injected trusted header where the baseline did not is a header-injection authorization bypass; disjoint from the headers --forbidden-bypass and --host-header inject; not CRLF/response-splitting (values are well-formed tokens); off by default because the spoofed-trust variants actively assert internal-origin/privileged identity against the access-control layer")
 	scanCmd.Flags().BoolVar(&scanParamPollution, "parameter-pollution", false,
 		"test HTTP Parameter Pollution (HPP) access-control bypass using the caller's own credentials: for each query parameter, and each application/x-www-form-urlencoded body parameter, emit a duplicate occurrence carrying an attacker-chosen value — once appended after the original (last-wins parsers: PHP, ASP.NET) and once prepended before it (first-wins parsers: some Java stacks) — while always preserving the original occurrence so a fronting gate that reads the expected value still passes; a request that succeeds with the polluted value where the original was denied means a WAF/gateway and the application framework disagree on which occurrence is authoritative; disjoint from --swap-object (which replaces, not duplicates, a value); off by default because the polluted variants re-issue requests with altered parameter values that can reach mutating handlers")
+	scanCmd.Flags().BoolVar(&scanOriginSpoof, "origin-spoof", false,
+		"test Origin/Referer-validation access-control bypass using the caller's own credentials: spoof the Origin (and Referer) the request claims to come from — set Origin: null (allowlists that fail-open on the null origin from sandboxed iframes / redirect laundering), a wholly-foreign attacker site (apps that do not validate Origin at all), and attacker hosts crafted to defeat naive allowlist matching of the request's own host (prefix-match <host>.attacker.example, suffix-match embedding the trusted labels, and userinfo-confusion <host>@attacker.example); a state-change that succeeds under a forged origin where a correct check would refuse it is an origin-validation CSRF bypass; disjoint from --csrf-header (which forges the anti-CSRF token, not the origin) and --host-header (which spoofs the Host); off by default because the spoofed-origin variants re-issue the (often state-changing) request asserting an untrusted origin")
 }
 
 func resetScanFlags() {
@@ -186,6 +189,7 @@ func resetScanFlags() {
 	scanCookieTamper = false
 	scanHeaderInject = false
 	scanParamPollution = false
+	scanOriginSpoof = false
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -309,7 +313,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// derived from its representative sample's auth components.
 	attributionWarnings := attributeEndpoints(endpoints, matrix)
 
-	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate, scanJWTAttack, scanMassAssign, scanXXE, scanGraphQL, scanForbidBypass, scanWSHijack, scanCSRFHeader, scanMethodOverride, scanHostHeader, scanCookieTamper, scanHeaderInject, scanParamPollution)
+	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate, scanJWTAttack, scanMassAssign, scanXXE, scanGraphQL, scanForbidBypass, scanWSHijack, scanCSRFHeader, scanMethodOverride, scanHostHeader, scanCookieTamper, scanHeaderInject, scanParamPollution, scanOriginSpoof)
 	if err != nil {
 		return err
 	}
@@ -1226,12 +1230,14 @@ func buildEvaluator(name string, matrix *model.RoleMatrix) (detect.Evaluator, er
 // enabling the CookieTamper (--cookie-tampering) mutator when cookieTamper is
 // true, and enabling the HeaderInjection (--header-injection) mutator when
 // headerInjection is true, and enabling the ParamPollution
-// (--parameter-pollution) mutator when paramPollution is true.
+// (--parameter-pollution) mutator when paramPollution is true, and enabling the
+// OriginSpoof (--origin-spoof) mutator when originSpoof is true.
 // EnumerateID, JWTAuth, MassAssign, XXE, GraphQL, ForbiddenBypass, WSHijack,
-// CSRFHeader, MethodOverride, HostHeader, CookieTamper, HeaderInjection, and
-// ParamPollution are always registered but inert in their disabled state, so
-// the canonical DefaultRegistry order (and the order test) stays unchanged.
-func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, xxe, graphql, forbidBypass, wsHijack, csrfHeader, methodOverride, hostHeader, cookieTamper, headerInjection, paramPollution bool) (*mutate.Registry, error) {
+// CSRFHeader, MethodOverride, HostHeader, CookieTamper, HeaderInjection,
+// ParamPollution, and OriginSpoof are always registered but inert in their
+// disabled state, so the canonical DefaultRegistry order (and the order test)
+// stays unchanged.
+func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, xxe, graphql, forbidBypass, wsHijack, csrfHeader, methodOverride, hostHeader, cookieTamper, headerInjection, paramPollution, originSpoof bool) (*mutate.Registry, error) {
 	enumMutator := mutate.EnumerateID{N: enumerateN}
 	jwtAuthMutator := mutate.JWTAuth{Enabled: jwtAttack}
 	massAssignMutator := mutate.MassAssign{Enabled: massAssign}
@@ -1245,14 +1251,15 @@ func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, x
 	cookieTamperMutator := mutate.CookieTamper{Enabled: cookieTamper}
 	headerInjectionMutator := mutate.HeaderInjection{Enabled: headerInjection}
 	paramPollutionMutator := mutate.ParamPollution{Enabled: paramPollution}
+	originSpoofMutator := mutate.OriginSpoof{Enabled: originSpoof}
 
 	if wordlistPath == "" {
 		// Extend the default registry with EnumerateID + JWTAuth +
 		// MassAssign + XXE + GraphQL + ForbiddenBypass + WSHijack + CSRFHeader +
 		// MethodOverride + HostHeader + CookieTamper + HeaderInjection +
-		// ParamPollution (all no-op when disabled).
+		// ParamPollution + OriginSpoof (all no-op when disabled).
 		base := mutate.DefaultRegistry()
-		all := append(base.All(), enumMutator, jwtAuthMutator, massAssignMutator, xxeMutator, graphqlMutator, forbidMutator, wsHijackMutator, csrfHeaderMutator, methodOverrideMutator, hostHeaderMutator, cookieTamperMutator, headerInjectionMutator, paramPollutionMutator)
+		all := append(base.All(), enumMutator, jwtAuthMutator, massAssignMutator, xxeMutator, graphqlMutator, forbidMutator, wsHijackMutator, csrfHeaderMutator, methodOverrideMutator, hostHeaderMutator, cookieTamperMutator, headerInjectionMutator, paramPollutionMutator, originSpoofMutator)
 		return mutate.NewRegistry(all...), nil
 	}
 	data, err := os.ReadFile(wordlistPath)
@@ -1292,6 +1299,7 @@ func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, x
 		cookieTamperMutator,
 		headerInjectionMutator,
 		paramPollutionMutator,
+		originSpoofMutator,
 	), nil
 }
 
