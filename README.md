@@ -890,6 +890,69 @@ gating of `--content-type-confusion`, `--origin-spoof`,
 `--host-header`, `--forbidden-bypass`, `--method-override`,
 `--csrf-header`, `--ws-hijack`, `--xxe`, and `--mass-assign`.
 
+## Prototype pollution (`--prototype-pollution`)
+
+Where `--mass-assign` attacks *which top-level properties the model
+binds* (server-side BOPLA at the object layer — set `is_admin` on the
+model instance), `--prototype-pollution` attacks *which properties every
+object in the JavaScript runtime inherits* (set `is_admin` on
+Object.prototype so every object answers `true` for it) — a distinct
+authz-bypass class with a distinct fix that the Node.js ecosystem has
+been re-discovering since CVE-2018-3721 (lodash), CVE-2019-10744
+(lodash), CVE-2019-11358 (jQuery), and the 2024 Express qs / parseUrl
+chains. A backend that deep-merges attacker-controlled JSON
+(`_.merge`, `_.defaultsDeep`, `$.extend(true, …)`, hand-rolled recursive
+Object.assign) walks past the `__proto__` / `constructor.prototype` /
+`prototype` keys it should be guarding and writes onto Object.prototype;
+every subsequent object the process creates inherits the polluted
+property and a downstream authz check that reads `req.user.is_admin`
+finds `true` even though the request never legitimately granted it:
+
+```
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --prototype-pollution
+```
+
+For each privileged property in the canonical set (`admin`, `is_admin`,
+`isAdmin`, `role`, `roles`, `verified` — the same surface
+`--mass-assign` covers) and each of the three pollution vectors, a
+separate variant is emitted in deterministic sorted-by-field then
+sorted-by-vector order:
+
+- **`__proto__`** — `{"__proto__": {"is_admin": true, …}}`. The direct,
+  original CVE-2018-3721 vector — naive recursive-merge helpers follow
+  the literal `__proto__` key into Object.prototype.
+- **`constructor.prototype`** —
+  `{"constructor": {"prototype": {"is_admin": true, …}}}`. Every
+  object's `constructor` is a function whose `.prototype` IS
+  Object.prototype, so this vector bypasses guards that block only the
+  literal `__proto__` key.
+- **`prototype`** — `{"prototype": {"is_admin": true, …}}`. The bare
+  alias used by mongoose / handlebars / some hand-rolled merges that
+  walk a key literally named `prototype` thinking it is just data — a
+  third pathway documented across the npm-ecosystem CVE chain.
+
+Every variant keeps the caller's own credentials (`Identity == nil`) and
+preserves the caller's own top-level body fields verbatim; the pollution
+payload is *added* alongside them, never replaces. Arrays, scalars, and
+non-JSON bodies emit no variants — there is nothing for a JSON
+deep-merge helper to recurse into. If the caller's own body already
+contains a top-level `__proto__` / `constructor` / `prototype` key
+(vanishingly rare in real traffic), that specific vector is skipped —
+injecting a key the caller already sends proves nothing. Findings are
+class `privesc`.
+
+`--prototype-pollution` is **off by default**: the polluted JSON reaches
+deep-merge code paths whose effect is *process-wide* (the entire Node.js
+process answers the polluted property thereafter, including for every
+concurrent user, until the runtime restarts), so it only fires when you
+opt in — mirroring the gating of `--cache-deception`,
+`--content-type-confusion`, `--origin-spoof`, `--parameter-pollution`,
+`--header-injection`, `--cookie-tampering`, `--host-header`,
+`--forbidden-bypass`, `--method-override`, `--csrf-header`,
+`--ws-hijack`, `--xxe`, and `--mass-assign`.
+
 ## Role matrix
 
 The role matrix is YAML. Minimum viable shape:
