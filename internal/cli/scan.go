@@ -70,6 +70,7 @@ var (
 	scanCacheDeception  bool   // --cache-deception: decorate the URL with cacheable extensions/segments so a fronting cache stores the caller's personal response at a public key (off by default)
 	scanProtoPollution  bool   // --prototype-pollution: bury privileged properties under __proto__ / constructor.prototype / prototype keys in JSON object bodies so a deep-merge helper writes onto Object.prototype (Node.js authz bypass; off by default)
 	scanPathTraversal   bool   // --path-traversal: reshape the trailing path segment with `../` chains (literal, encoded, double-encoded, nested, null-byte-suffixed, absolute) to escape the resource scope and reach OS-sensitive files / sibling tenant directories (OWASP A01:2021 path traversal / LFI; off by default)
+	scanSSRFProbe       bool   // --ssrf-probe: rewrite URL-bearing query/body/JSON parameters to SSRF payloads (internal IPs, AWS/GCP/Azure metadata endpoints, file://, gopher://) to weaponise the server's outbound fetch (OWASP A10:2021 SSRF; off by default)
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -161,6 +162,8 @@ func init() {
 		"test JavaScript prototype-pollution privilege escalation using the caller's own credentials: for each privileged property (admin, is_admin, isAdmin, role, roles, verified), bury it under the three canonical pollution vectors (__proto__, constructor.prototype, prototype) inside the JSON object request body so a Node.js deep-merge helper (lodash _.merge, $.extend(true,…), defaultsDeep, hand-rolled recursive Object.assign) walks past the prototype guard and writes the polluted property onto Object.prototype — every subsequent object in the process answers true for the flag and any downstream authz check that reads req.user.is_admin (or equivalent) is bypassed runtime-wide; arrays, scalars, and non-JSON bodies are skipped; disjoint from --mass-assign (which sets the same keys at the top level — a different vuln class with a different fix); off by default because the polluted JSON reaches deep-merge code paths whose effect is process-wide and persists for every concurrent user until the runtime restarts")
 	scanCmd.Flags().BoolVar(&scanPathTraversal, "path-traversal", false,
 		"test directory/path-traversal scope-escape using the caller's own credentials: replace the trailing path segment with six disjoint traversal payloads (literal `../`, percent-encoded `..%2f`, double-encoded `..%252f`, nested `....//`, null-byte-suffixed `%00`, and absolute-path) pointing at three high-signal target files (etc/passwd, proc/self/environ, windows/win.ini), so the caller breaks OUT of the resource collection the route prefix was supposed to confine them to and reaches OS-sensitive files or sibling-tenant directories the application never intended to expose; disjoint from --forbidden-bypass (which reshapes the path to resolve back to the SAME handler, e.g. /admin/..;/admin) and from --swap-object / --enumerate (which stay inside the resource collection); root/empty paths are skipped; off by default because the traversal payloads are active probes that exfiltrate sensitive file contents on a vulnerable target (OWASP A01:2021)")
+	scanCmd.Flags().BoolVar(&scanSSRFProbe, "ssrf-probe", false,
+		"test Server-Side Request Forgery using the caller's own credentials: for each URL-bearing query parameter, urlencoded body parameter, and top-level JSON string field (matched by name — url, uri, redirect, callback, webhook, target, dest, endpoint, next, return, src, host, image, fetch — or by value parsing as an absolute http(s) URL), rewrite the value to seven disjoint SSRF payloads spanning internal-network probes (loopback 127.0.0.1, RFC1918 10.0.0.1), cloud-provider instance-metadata endpoints (AWS IMDSv1 169.254.169.254, GCP metadata.google.internal, Azure IMDS), and protocol smuggling (file:///etc/passwd, gopher://127.0.0.1:6379/_INFO) so the caller weaponises the server's outbound fetch helper to reach internal network resources or exfiltrate cloud-instance IAM credentials (Capital One / AWS IMDS 2019 breach shape); disjoint from --path-traversal (which reshapes the request path, not a fetch-target parameter) and --mass-assign (which injects privileged JSON properties, not URL rewrites); requests with no URL-bearing parameter emit no variants; off by default because the SSRF payloads reach the server's internal network including cloud metadata endpoints whose response can contain IAM credentials (OWASP A10:2021)")
 }
 
 func resetScanFlags() {
@@ -206,6 +209,7 @@ func resetScanFlags() {
 	scanCacheDeception = false
 	scanProtoPollution = false
 	scanPathTraversal = false
+	scanSSRFProbe = false
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -329,7 +333,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// derived from its representative sample's auth components.
 	attributionWarnings := attributeEndpoints(endpoints, matrix)
 
-	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate, scanJWTAttack, scanMassAssign, scanXXE, scanGraphQL, scanForbidBypass, scanWSHijack, scanCSRFHeader, scanMethodOverride, scanHostHeader, scanCookieTamper, scanHeaderInject, scanParamPollution, scanOriginSpoof, scanCTConfusion, scanCacheDeception, scanProtoPollution, scanPathTraversal)
+	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate, scanJWTAttack, scanMassAssign, scanXXE, scanGraphQL, scanForbidBypass, scanWSHijack, scanCSRFHeader, scanMethodOverride, scanHostHeader, scanCookieTamper, scanHeaderInject, scanParamPollution, scanOriginSpoof, scanCTConfusion, scanCacheDeception, scanProtoPollution, scanPathTraversal, scanSSRFProbe)
 	if err != nil {
 		return err
 	}
@@ -1257,7 +1261,7 @@ func buildEvaluator(name string, matrix *model.RoleMatrix) (detect.Evaluator, er
 // PrototypePollution, and PathTraversal are always registered but inert in
 // their disabled state, so the canonical DefaultRegistry order (and the
 // order test) stays unchanged.
-func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, xxe, graphql, forbidBypass, wsHijack, csrfHeader, methodOverride, hostHeader, cookieTamper, headerInjection, paramPollution, originSpoof, ctConfusion, cacheDeception, protoPollution, pathTraversal bool) (*mutate.Registry, error) {
+func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, xxe, graphql, forbidBypass, wsHijack, csrfHeader, methodOverride, hostHeader, cookieTamper, headerInjection, paramPollution, originSpoof, ctConfusion, cacheDeception, protoPollution, pathTraversal, ssrfProbe bool) (*mutate.Registry, error) {
 	enumMutator := mutate.EnumerateID{N: enumerateN}
 	jwtAuthMutator := mutate.JWTAuth{Enabled: jwtAttack}
 	massAssignMutator := mutate.MassAssign{Enabled: massAssign}
@@ -1276,6 +1280,7 @@ func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, x
 	cacheDeceptionMutator := mutate.CacheDeception{Enabled: cacheDeception}
 	protoPollutionMutator := mutate.PrototypePollution{Enabled: protoPollution}
 	pathTraversalMutator := mutate.PathTraversal{Enabled: pathTraversal}
+	ssrfProbeMutator := mutate.SSRFProbe{Enabled: ssrfProbe}
 
 	if wordlistPath == "" {
 		// Extend the default registry with EnumerateID + JWTAuth +
@@ -1284,7 +1289,7 @@ func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, x
 		// ParamPollution + OriginSpoof + ContentTypeConfusion + CacheDeception +
 		// PrototypePollution + PathTraversal (all no-op when disabled).
 		base := mutate.DefaultRegistry()
-		all := append(base.All(), enumMutator, jwtAuthMutator, massAssignMutator, xxeMutator, graphqlMutator, forbidMutator, wsHijackMutator, csrfHeaderMutator, methodOverrideMutator, hostHeaderMutator, cookieTamperMutator, headerInjectionMutator, paramPollutionMutator, originSpoofMutator, ctConfusionMutator, cacheDeceptionMutator, protoPollutionMutator, pathTraversalMutator)
+		all := append(base.All(), enumMutator, jwtAuthMutator, massAssignMutator, xxeMutator, graphqlMutator, forbidMutator, wsHijackMutator, csrfHeaderMutator, methodOverrideMutator, hostHeaderMutator, cookieTamperMutator, headerInjectionMutator, paramPollutionMutator, originSpoofMutator, ctConfusionMutator, cacheDeceptionMutator, protoPollutionMutator, pathTraversalMutator, ssrfProbeMutator)
 		return mutate.NewRegistry(all...), nil
 	}
 	data, err := os.ReadFile(wordlistPath)
@@ -1329,6 +1334,7 @@ func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, x
 		cacheDeceptionMutator,
 		protoPollutionMutator,
 		pathTraversalMutator,
+		ssrfProbeMutator,
 	), nil
 }
 

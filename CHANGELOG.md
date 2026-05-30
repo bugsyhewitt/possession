@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **SSRF probe mutator** (`--ssrf-probe`,
+  `internal/mutate/ssrf_probe.go`): a new mutator targeting OWASP
+  A10:2021 Server-Side Request Forgery at the request-parameter layer.
+  Where `--path-traversal` reshapes the request path so the caller
+  breaks out of the resource collection, `--mass-assign` injects
+  privileged JSON properties, and `--swap-object` substitutes a
+  resource-reference ID, `--ssrf-probe` rewrites URL-bearing query,
+  urlencoded body, and top-level JSON string parameters to attacker-
+  chosen SSRF payloads — weaponising the server's outbound HTTP
+  client to reach loopback, RFC1918 private space, cloud-provider
+  instance-metadata endpoints (AWS IMDSv1 169.254.169.254, GCP
+  metadata.google.internal, Azure IMDS), and protocol-smuggling
+  schemes (`file://`, `gopher://`). On a vulnerable EC2 instance the
+  AWS IMDSv1 payload leaks instance IAM credentials in one hop — the
+  2019 Capital One breach shape. Eligible parameters are matched by
+  name (substring, case-insensitive, against a sorted token list
+  including `url`, `uri`, `redirect`, `callback`, `webhook`,
+  `target`, `dest`, `endpoint`, `next`, `return`, `src`, `host`,
+  `image`, `fetch`) OR by value shape (an existing absolute http(s)
+  URL). Cross-product is (3 surfaces × 7 techniques × eligible-
+  parameter count); requests with no URL-bearing parameter emit
+  zero variants. Every variant keeps the caller's own credentials
+  (`Identity == nil`) — this is a same-caller fetch-target-rewrite
+  probe, not an identity swap. Findings are class `ssrf`
+  (ASVS V12.6). Off by default — the payloads reach the server's
+  internal network including cloud metadata endpoints whose response
+  on a vulnerable target contains the instance's IAM credentials.
+  README and scan-help text updated.
+
 - **Prototype-pollution mutator** (`--prototype-pollution`,
   `internal/mutate/prototype_pollution.go`): a new mutator in the
   privilege-escalation family targeting the canonical Node.js / browser

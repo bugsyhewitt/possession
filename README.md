@@ -1013,6 +1013,71 @@ the gating of `--prototype-pollution`, `--cache-deception`,
 `--forbidden-bypass`, `--method-override`, `--csrf-header`,
 `--ws-hijack`, `--xxe`, and `--mass-assign`.
 
+## Server-Side Request Forgery (`--ssrf-probe`)
+
+Where `--path-traversal` reshapes the request path so the caller breaks
+OUT of the resource collection the route prefix was supposed to confine
+them to, `--mass-assign` injects privileged JSON properties at the
+top level, and `--swap-object` substitutes a known-owner resource
+reference, the `--ssrf-probe` flag attacks *what server-side network
+resource the application fetches on the caller's behalf*: any URL-bearing
+parameter (a fetch target, a webhook destination, an avatar URL, a
+redirect URI) is rewritten to point at the server's own internal network,
+weaponising the server's outbound HTTP client to reach loopback, RFC1918
+private space, cloud-provider instance-metadata endpoints, or other
+protocols entirely. On a vulnerable cloud workload the AWS IMDSv1
+endpoint leaks instance IAM credentials in one hop — the 2019 Capital
+One breach shape. This is OWASP A10:2021 SSRF at the request-parameter
+layer:
+
+```
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --ssrf-probe
+```
+
+Three surfaces are eligible — query parameters, urlencoded form bodies,
+and top-level JSON object string fields — matched by name (any of
+`url`, `uri`, `redirect`, `callback`, `webhook`, `target`, `dest`,
+`destination`, `fetch`, `image`, `src`, `host`, `endpoint`, `next`,
+`return`, by substring, case-insensitive) OR by value shape (the
+parameter already carries an absolute `http(s)` URL). For each eligible
+parameter, seven disjoint payload techniques are emitted in deterministic
+sorted-by-technique order; the original (gate-passing) value is replaced
+with the SSRF payload while every other parameter in the request is
+preserved verbatim:
+
+| Technique | Wire-form payload | What it reaches |
+|---|---|---|
+| `aws-imds-v1` | `http://169.254.169.254/latest/meta-data/` | The AWS Instance Metadata Service v1 endpoint — on an EC2 instance whose IMDS has not been hardened to v2, returns the role credentials the instance is assigned. The 2019 Capital One breach shape. |
+| `azure-imds` | `http://169.254.169.254/metadata/instance?api-version=2021-02-01` | The Azure IMDS endpoint — same link-local address as AWS, distinct path and query. |
+| `gcp-metadata` | `http://metadata.google.internal/computeMetadata/v1/` | The GCP metadata server — a vulnerable fetch helper that propagates client-set headers exposes the same class of leak. |
+| `internal-ip-loopback` | `http://127.0.0.1/` | Localhost — the simplest probe; a positive response means the server can reach sibling services bound to localhost (admin panels, internal management APIs, debug endpoints) the perimeter firewall hides. |
+| `internal-ip-private` | `http://10.0.0.1/` | RFC1918 private space — the pivot for east-west lateral movement into internal network segments the caller cannot reach directly. |
+| `protocol-file` | `file:///etc/passwd` | The `file://` URL scheme — URL fetchers built on libcurl (or naive HTTP clients that wrap a URL without a scheme allowlist) accept it and return local file contents. |
+| `protocol-gopher` | `gopher://127.0.0.1:6379/_INFO` | The `gopher://` URL scheme aimed at local Redis — frames an arbitrary TCP payload, turning blind SSRF into a protocol-smuggling primitive against any local TCP service. |
+
+Every variant keeps the caller's own credentials (`Identity == nil`) —
+this is a same-caller fetch-target-rewrite probe, not an identity swap.
+Requests with no URL-bearing parameter (no query, no urlencoded body
+field, no JSON string field matching either the name list or value-shape
+check) emit zero variants — there is no signal to probe. Findings are
+class `ssrf` (ASVS V12.6 — SSRF protection). The mutation `Detail`
+carries the surface, parameter name, technique, and full wire payload so
+the reporter can quote both the original value and the SSRF target the
+operator should re-fetch by hand to confirm the response shape matches
+an IMDS / metadata / local-service signature.
+
+`--ssrf-probe` is **off by default**: the SSRF payloads reach the
+server's internal network including cloud metadata endpoints whose
+response on a vulnerable target contains the instance's IAM credentials,
+so it only fires when you opt in — mirroring the gating of
+`--path-traversal`, `--prototype-pollution`, `--cache-deception`,
+`--content-type-confusion`, `--origin-spoof`, `--parameter-pollution`,
+`--header-injection`, `--cookie-tampering`, `--host-header`,
+`--forbidden-bypass`, `--method-override`, `--csrf-header`,
+`--ws-hijack`, `--xxe`, and `--mass-assign`.
+
 ## Role matrix
 
 The role matrix is YAML. Minimum viable shape:
