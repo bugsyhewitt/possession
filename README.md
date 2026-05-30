@@ -953,6 +953,66 @@ opt in — mirroring the gating of `--cache-deception`,
 `--forbidden-bypass`, `--method-override`, `--csrf-header`,
 `--ws-hijack`, `--xxe`, and `--mass-assign`.
 
+## Directory / path traversal (`--path-traversal`)
+
+Where `--forbidden-bypass` reshapes the request path so a fronting
+proxy's deny-rule matcher desynchronises from the upstream router
+(`/admin/..;/admin` resolves back to the SAME protected handler), and
+`--swap-object` / `--enumerate` stay INSIDE the resource collection
+(substitute another identity's known IDs, sweep neighbours), the
+`--path-traversal` flag attacks *the resource scope boundary itself*:
+the caller breaks OUT of the per-user / per-tenant subtree the route
+prefix was supposed to confine them to, and reaches an OS-sensitive
+file (`/etc/passwd`, `/proc/self/environ`, `windows/win.ini`) or a
+sibling-tenant directory the application never intended to expose. This
+is OWASP A01:2021 path traversal / Local File Inclusion at the
+request-path layer — the same vuln class behind the long tail of
+"directory traversal" advisories that every static-asset handler,
+per-user file API, and legacy report-export endpoint keeps
+re-discovering:
+
+```
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --path-traversal
+```
+
+For each of six disjoint techniques and each of three high-signal
+target files, a separate variant is emitted in deterministic
+sorted-by-technique then sorted-by-target order. The trailing path
+segment of the captured request is replaced with the traversal
+payload; the base directory (everything up to and including the final
+`/`) is preserved so the variant rides the route the caller
+legitimately reached:
+
+| Technique | Wire-form payload | What it defeats |
+|---|---|---|
+| `dot-dot-slash` | `../../../../../../etc/passwd` | The textbook literal traversal — handlers that concatenate the segment onto a base directory without canonicalisation (`filepath.Join` strips it; many language runtimes do not). |
+| `dot-dot-encoded` | `..%2f..%2f..%2f..%2f..%2f..%2fetc/passwd` | Middleware that filters the literal `../` but URL-decodes the path before the file lookup. RawPath keeps `%2f` un-double-encoded on the wire. |
+| `dot-dot-double-encoded` | `..%252f..%252f..%252f..%252f..%252f..%252fetc/passwd` | Gateway/handler boundaries that each URL-decode independently — one decode produces `..%2f` (the literal-`../` filter sees no match), the second decode produces the real traversal. |
+| `nested-dot-dot` | `....//....//....//....//....//....//etc/passwd` | Hand-written sanitisers that strip a single `../` literal — after the filter removes one `../`, the remaining bytes collapse back into `../`. |
+| `null-byte-suffix` | `../../../../../../etc/passwd%00` | Extension-allowlist filters in C-backed handlers — the high-level string comparison sees a (post-NUL) suffix and approves; `read(2)` / `open(2)` terminate the path at NUL. |
+| `absolute-path` | `/etc/passwd` | Handlers that strip leading `../` segments but pass the rest through to a `File.open` / `fs.readFile` call that honours absolute paths. The payload has no `..` at all. |
+
+Every variant keeps the caller's own credentials (`Identity == nil`) —
+this is a same-caller scope-escape probe, not an identity swap. Root
+or empty paths emit no variants (there is no trailing segment to
+reshape). Findings are class `authz-bypass` (ASVS V12.3 — file &
+resource control). The mutation `Detail` carries both the technique
+and the target so the reporter (and any future repro-snippet
+generator) can quote both the original URL and the traversal payload
+the operator should re-fetch by hand to confirm the bytes returned
+match the target file.
+
+`--path-traversal` is **off by default**: the traversal payloads are
+active probes that — on a vulnerable target — exfiltrate the contents
+of OS-sensitive files, so it only fires when you opt in — mirroring
+the gating of `--prototype-pollution`, `--cache-deception`,
+`--content-type-confusion`, `--origin-spoof`, `--parameter-pollution`,
+`--header-injection`, `--cookie-tampering`, `--host-header`,
+`--forbidden-bypass`, `--method-override`, `--csrf-header`,
+`--ws-hijack`, `--xxe`, and `--mass-assign`.
+
 ## Role matrix
 
 The role matrix is YAML. Minimum viable shape:
