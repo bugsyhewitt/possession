@@ -826,6 +826,70 @@ validation, so it only fires when you opt in — mirroring the gating of
 `--method-override`, `--csrf-header`, `--ws-hijack`, `--xxe`, and
 `--mass-assign`.
 
+## Web Cache Deception (`--cache-deception`)
+
+Where `--content-type-confusion` attacks *which body parser each layer of
+the stack chooses*, `--forbidden-bypass` attacks *how the path is matched
+against a deny rule*, and `--host-header` attacks *which host the gate
+believes the request targets*, `--cache-deception` attacks *which storage
+tier sees the response* — the canonical Web Cache Deception family (Omer
+Gil, BlackHat 2017; refreshed in the 2024–2026 BlackHat
+Cache-Confusion / CDN-Confusion research). The URL is decorated with
+cacheable file-extension shapes a fronting CDN / edge cache stores by
+default; the application router strips, ignores, or normalises away the
+decoration and still returns the caller's *personal* response. The cache
+then serves that personal response under a public-looking key to every
+later caller — including the unauthenticated internet:
+
+```
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --cache-deception
+```
+
+Four technique shapes, each cross-producted with the cacheable extension
+set (`css`, `js`, `png`, `jpg`, `ico`, `gif`, `svg` — the file types every
+CDN's default rule stores by extension), emitted in deterministic
+sorted-by-name order:
+
+- **path-suffix** — `/api/me` → `/api/me/possession.css`. The Omer-Gil
+  original shape; the cache sees a `.css` URL while route-globbing
+  frameworks (Express, Rails, greedy Spring path variables) still hit the
+  personal handler.
+- **path-extension** — `/api/me` → `/api/me.css`. Frameworks that strip a
+  known extension before routing (Rails `respond_to`, ASP.NET Core
+  content-negotiation) still hit the personal handler, while the cache
+  stores the `.css` URL.
+- **semicolon-suffix** — `/api/me` → `/api/me;.css`. Tomcat / Spring strip
+  the matrix-parameter segment when matching the handler; many caches
+  keep the literal `;` in the key.
+- **encoded-suffix** — `/api/me` → `/api/me%2fpossession.css`. A cache that
+  URL-normalises before key-construction collapses `%2f` → `/` and sees a
+  `.css` extension; a router that does NOT normalise treats the whole
+  tail as one path segment and still routes to `/api/me` (the same
+  gateway/handler URL-normalisation desync class `--forbidden-bypass`'s
+  encoded path tricks exploit, applied post-path).
+
+Every variant keeps the caller's own credentials (`Identity == nil`) —
+this is NOT an identity swap; the same caller's same fetch is decorated
+with a cacheable URL shape. Endpoints whose path already ends in a
+cacheable extension are skipped (the response is already at a cacheable
+URL by intent). On a trailing-slash path the `path-extension` and
+`semicolon-suffix` shapes are skipped (they need a non-empty terminal
+segment); `path-suffix` and `encoded-suffix` still fire. The mutation
+detail records the original path and the decorated path so the operator
+can re-fetch the decorated URL from a cold cache to confirm the leak.
+Findings are class `authz-bypass` (ASVS V8.3.x, severity HIGH).
+
+`--cache-deception` is **off by default**: the decorated variants reach
+the caller's *own* personal endpoints by design (the bug being tested)
+and therefore observably warm an upstream cache at the decorated URL on
+the caller's behalf, so it only fires when you opt in — mirroring the
+gating of `--content-type-confusion`, `--origin-spoof`,
+`--parameter-pollution`, `--header-injection`, `--cookie-tampering`,
+`--host-header`, `--forbidden-bypass`, `--method-override`,
+`--csrf-header`, `--ws-hijack`, `--xxe`, and `--mass-assign`.
+
 ## Role matrix
 
 The role matrix is YAML. Minimum viable shape:
