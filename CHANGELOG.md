@@ -9,6 +9,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Open-redirect mutator** (`--open-redirect`,
+  `internal/mutate/open_redirect.go`): a new mutator targeting the
+  CWE-601 / ASVS V5.1.5 unvalidated-redirect family at the
+  request-parameter layer. Where `--ssrf-probe` attacks *what
+  server-side network resource the application fetches on the caller's
+  behalf* (the URL value is consumed by an outbound HTTP client
+  reaching internal IPs / cloud metadata), `--open-redirect` attacks
+  *what destination the application bounces the caller's browser to*
+  (the URL value is reflected into a `Location:` header reaching an
+  attacker-controlled external site). Eligible parameters are matched
+  by name (substring, case-insensitive, against a sorted token list —
+  `back`, `callback`, `continue`, `dest`, `destination`, `goto`,
+  `next`, `redir`, `redirect`, `return`, `returnto`, `success`,
+  `target`, `url` — covers `redirect_uri`, `redirect_url`, `returnTo`,
+  `next_page`, etc.) OR by value shape (an existing absolute `http(s)`
+  URL). Four surfaces (query, urlencoded body, top-level JSON string,
+  and the `Referer` header when present) are each cross-producted with
+  seven disjoint payload techniques: `backslash-host`
+  (`https://attacker.example\@target.example/` — RFC-vs-browser
+  authority-parsing disagreement), `cross-origin`
+  (`https://attacker.example/` — textbook external URL),
+  `data-uri` (`data:text/html,<script>alert(1)</script>` — XSS via
+  redirect), `javascript-uri` (`javascript:alert(1)` — XSS via
+  redirect on legacy clients / WebViews), `protocol-relative`
+  (`//attacker.example/` — defeats same-origin-by-leading-slash
+  defenses), `userinfo-confusion`
+  (`https://target.example@attacker.example/` — naive substring/prefix
+  validators read the username as the host), and `whitespace-prefix`
+  (validators trim before matching, then pass the un-trimmed value to
+  the browser which also trims). The `Referer` surface emits only the
+  header-safe technique subset (excludes `backslash-host` and
+  `whitespace-prefix`, which `net/http` would reject or silently trim
+  from a header value). Every variant keeps the caller's own
+  credentials (`Identity == nil`) — this is a same-caller
+  destination-rewrite probe, not an identity swap. Requests with no
+  redirect-destination parameter and no `Referer` emit zero variants.
+  Findings are class `open-redirect` (ASVS V5.1.5, severity MEDIUM:
+  impact is phishing / OAuth-token leakage, not direct privilege
+  bypass). Off by default — the payloads point callers' browsers at
+  attacker-controlled URLs and embed XSS-via-redirect shapes (`data:` /
+  `javascript:`). README and scan-help text updated. Disjoint from
+  `--ssrf-probe` (server-side fetch, not client-side redirect),
+  `--origin-spoof` (spoofs `Origin`/`Referer` to bypass origin-validation
+  CSRF, not to coerce a redirect destination), and `--csrf-header`
+  (forges anti-CSRF tokens, not redirect destinations).
+
 - **SSRF probe mutator** (`--ssrf-probe`,
   `internal/mutate/ssrf_probe.go`): a new mutator targeting OWASP
   A10:2021 Server-Side Request Forgery at the request-parameter layer.

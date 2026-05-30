@@ -1078,6 +1078,88 @@ so it only fires when you opt in — mirroring the gating of
 `--forbidden-bypass`, `--method-override`, `--csrf-header`,
 `--ws-hijack`, `--xxe`, and `--mass-assign`.
 
+## Open redirect (`--open-redirect`)
+
+Where `--ssrf-probe` attacks *what server-side network resource the application
+fetches on the caller's behalf* (the URL value is consumed by an outbound HTTP
+client → internal IPs / cloud metadata), `--open-redirect` attacks *what
+destination the application bounces the caller's browser to* (the URL value is
+reflected into a `Location:` header → an attacker-controlled external site).
+The vuln classes are disjoint: SSRF reaches internal targets; open-redirect
+reaches external attacker domains and abuses URL-parser disagreement. The
+canonical CWE-601 / ASVS V5.1.5 pattern: a post-login `next` parameter, an
+OAuth `redirect_uri`, a payment-flow `returnTo`, or a `callback` URL is taken
+from the request and echoed into a `Location:` (or a meta-refresh /
+`window.location.assign`) without validating that the destination is in-scope
+for the application. An attacker who substitutes that value with an
+attacker-controlled URL turns the trusted host into a **phishing-redirect
+surface** — the victim sees a legitimate `target.example` page that silently
+bounces to `attacker.example`. On an OAuth flow, the same primitive **leaks
+authorization codes / access tokens** to the attacker via the URL fragment.
+
+Every variant keeps the **caller's own credentials** (no identity swap — the
+caller stays themselves; they merely supply a destination URL the validator
+should refuse):
+
+```bash
+possession scan capture.har \
+    --matrix matrix.yaml \
+    --open-redirect
+```
+
+Four surfaces (query, urlencoded body, top-level JSON string, and the
+`Referer` header when present) are each cross-producted with seven disjoint
+payload techniques, emitted in deterministic sorted-by-technique order:
+
+| Technique | Wire-form payload | What it defeats |
+|---|---|---|
+| `backslash-host` | `https://attacker.example\@target.example/` | RFC 3986 forbids `\` in the authority; browsers normalise `\` → `/`, so the parsed host is `attacker.example` while a validator that splits on `@` or substring-matches the literal host reads `target.example`. |
+| `cross-origin` | `https://attacker.example/` | An app that does not validate the destination at all (or only checks presence) honours a blatantly cross-site redirect target. |
+| `data-uri` | `data:text/html,<script>alert(1)</script>` | A browser following `Location: data:...` renders attacker HTML/JavaScript in the redirecting site's tab — XSS via redirect (legacy ecosystem and embedded WebViews still honour `data:` in top-level navigations). |
+| `javascript-uri` | `javascript:alert(1)` | An app that emits `Location: javascript:...` becomes a reflected-XSS sink via the redirect (most modern browsers refuse this in `Location`, but legacy clients and WebViews honour it). |
+| `protocol-relative` | `//attacker.example/` | A validator requiring the destination begin with `/` (assuming therefore same-origin) approves; browsers interpret the leading `//` as scheme-relative and navigate to `attacker.example` under the current scheme. The most common open-redirect bypass on same-origin-by-leading-slash defenses. |
+| `userinfo-confusion` | `https://target.example@attacker.example/` | RFC 3986 splits the authority into `userinfo@host:port`, so the parsed host is `attacker.example` while `target.example` is the username. A validator that does a naive substring / `hasPrefix` check sees `target.example` and approves. |
+| `whitespace-prefix` | ` https://attacker.example/` | Many validators trim before matching, then pass the un-trimmed value to the browser, which also trims — the validator and the browser agree on a different URL than what the validator inspected. |
+
+A parameter is eligible when its name **contains** any of the redirect-
+destination tokens (`back`, `callback`, `continue`, `dest`, `destination`,
+`goto`, `next`, `redir`, `redirect`, `return`, `returnto`, `success`, `target`,
+`url` — substring, case-insensitive — covers `redirect_uri`, `redirect_url`,
+`returnTo`, `next_page`, etc.) **or** its value already parses as an absolute
+`http(s)` URL. The `Referer` surface fires whenever a `Referer` is present on
+the captured request — an attacker who hosts a link on an attacker-controlled
+page can reliably set a victim's `Referer`, so the same primitive applies.
+
+The technique set on the `Referer` surface is a **subset** of the URL-surface
+set: `backslash-host` and `whitespace-prefix` carry bytes `net/http` would
+reject or silently trim from a header value, so they are emitted only on the
+URL surfaces (query, body, JSON) where the bytes survive transit unmangled.
+
+Detection rides the **existing comparative ladder** unchanged: the caller's
+own baseline against the unmutated request is the reference; a variant whose
+response carries a 3xx `Location:` containing the attacker payload (or a body
+that reflects the payload, for the `data:` / `javascript:` shapes) is the
+candidate open-redirect finding. Findings are class `open-redirect`
+(ASVS V5.1.5 — URL redirect validation, severity **MEDIUM**: the impact is
+phishing / OAuth-token leakage, not direct privilege bypass).
+
+Disjoint from related mutators by design:
+
+- `--ssrf-probe` (server-side fetch reaching internal IPs / cloud metadata)
+- `--origin-spoof` (spoofs `Origin` / `Referer` to bypass origin-validation
+  CSRF, not to coerce a redirect destination)
+- `--csrf-header` (forges anti-CSRF tokens, not redirect destinations)
+
+`--open-redirect` is **off by default**: the payloads point callers' browsers
+at attacker-controlled URLs and embed XSS-via-redirect shapes (`data:` /
+`javascript:`), so it only fires when you opt in — mirroring the gating of
+`--ssrf-probe`, `--path-traversal`, `--prototype-pollution`,
+`--cache-deception`, `--content-type-confusion`, `--origin-spoof`,
+`--parameter-pollution`, `--header-injection`, `--cookie-tampering`,
+`--host-header`, `--forbidden-bypass`, `--method-override`, `--csrf-header`,
+`--ws-hijack`, `--xxe`, and `--mass-assign`. Requests with no
+redirect-destination parameter and no `Referer` emit zero variants.
+
 ## Role matrix
 
 The role matrix is YAML. Minimum viable shape:
