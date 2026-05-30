@@ -68,6 +68,7 @@ var (
 	scanOriginSpoof     bool   // --origin-spoof: spoof the Origin/Referer headers (null, cross-origin, suffix-confusion) to bypass origin-validation CSRF/state-change defenses, using the caller's own credentials (off by default)
 	scanCTConfusion     bool   // --content-type-confusion: relabel the Content-Type so the WAF/gateway and the handler dispatch the body to different parsers (off by default)
 	scanCacheDeception  bool   // --cache-deception: decorate the URL with cacheable extensions/segments so a fronting cache stores the caller's personal response at a public key (off by default)
+	scanProtoPollution  bool   // --prototype-pollution: bury privileged properties under __proto__ / constructor.prototype / prototype keys in JSON object bodies so a deep-merge helper writes onto Object.prototype (Node.js authz bypass; off by default)
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -155,6 +156,8 @@ func init() {
 		"test Content-Type confusion / parser-sniffing access-control bypass using the caller's own credentials: keep the request body unchanged and relabel its Content-Type so a fronting WAF / API gateway short-circuits its body-inspection rules (\"this is text/plain, no JSON to validate\") while the application handler still parses the body as JSON (or coerces JSON↔XML↔form between parsers with different authz wiring); JSON bodies fan out to text/plain, application/xml, application/x-www-form-urlencoded, and a strip-Content-Type variant; XML bodies to application/json and text/plain; urlencoded forms to application/json; no-op relabels (declared type already matches the target) are skipped; off by default because the relabelled variants reach alternate-parser code paths with weaker validation")
 	scanCmd.Flags().BoolVar(&scanCacheDeception, "cache-deception", false,
 		"test Web Cache Deception (Omer Gil) access-control leakage using the caller's own credentials: decorate the URL with cacheable file-extension shapes (.css/.js/.png/.jpg/.ico/.gif/.svg) the application router strips or ignores but a fronting CDN / edge cache keys on, in four disjoint shapes — path-suffix (/api/me/possession.css), path-extension (/api/me.css), semicolon-suffix (/api/me;.css; Tomcat/Spring matrix-parameter), and encoded-suffix (/api/me%2fpossession.css; gateway/router URL-normalisation desync) — so the upstream still serves the caller's personal response while the cache stores it under a key any later (possibly unauthenticated) caller can fetch; endpoints already at a cacheable extension are skipped; disjoint from --forbidden-bypass (which mutates the path to defeat a deny rule) and --host-header (which spoofs the gate's host); off by default because the decorated variants observably warm an upstream cache at the decorated URL on the caller's behalf")
+	scanCmd.Flags().BoolVar(&scanProtoPollution, "prototype-pollution", false,
+		"test JavaScript prototype-pollution privilege escalation using the caller's own credentials: for each privileged property (admin, is_admin, isAdmin, role, roles, verified), bury it under the three canonical pollution vectors (__proto__, constructor.prototype, prototype) inside the JSON object request body so a Node.js deep-merge helper (lodash _.merge, $.extend(true,…), defaultsDeep, hand-rolled recursive Object.assign) walks past the prototype guard and writes the polluted property onto Object.prototype — every subsequent object in the process answers true for the flag and any downstream authz check that reads req.user.is_admin (or equivalent) is bypassed runtime-wide; arrays, scalars, and non-JSON bodies are skipped; disjoint from --mass-assign (which sets the same keys at the top level — a different vuln class with a different fix); off by default because the polluted JSON reaches deep-merge code paths whose effect is process-wide and persists for every concurrent user until the runtime restarts")
 }
 
 func resetScanFlags() {
@@ -198,6 +201,7 @@ func resetScanFlags() {
 	scanOriginSpoof = false
 	scanCTConfusion = false
 	scanCacheDeception = false
+	scanProtoPollution = false
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -321,7 +325,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// derived from its representative sample's auth components.
 	attributionWarnings := attributeEndpoints(endpoints, matrix)
 
-	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate, scanJWTAttack, scanMassAssign, scanXXE, scanGraphQL, scanForbidBypass, scanWSHijack, scanCSRFHeader, scanMethodOverride, scanHostHeader, scanCookieTamper, scanHeaderInject, scanParamPollution, scanOriginSpoof, scanCTConfusion, scanCacheDeception)
+	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate, scanJWTAttack, scanMassAssign, scanXXE, scanGraphQL, scanForbidBypass, scanWSHijack, scanCSRFHeader, scanMethodOverride, scanHostHeader, scanCookieTamper, scanHeaderInject, scanParamPollution, scanOriginSpoof, scanCTConfusion, scanCacheDeception, scanProtoPollution)
 	if err != nil {
 		return err
 	}
@@ -1245,10 +1249,10 @@ func buildEvaluator(name string, matrix *model.RoleMatrix) (detect.Evaluator, er
 // cacheDeception is true.
 // EnumerateID, JWTAuth, MassAssign, XXE, GraphQL, ForbiddenBypass, WSHijack,
 // CSRFHeader, MethodOverride, HostHeader, CookieTamper, HeaderInjection,
-// ParamPollution, OriginSpoof, ContentTypeConfusion, and CacheDeception are
-// always registered but inert in their disabled state, so the canonical
-// DefaultRegistry order (and the order test) stays unchanged.
-func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, xxe, graphql, forbidBypass, wsHijack, csrfHeader, methodOverride, hostHeader, cookieTamper, headerInjection, paramPollution, originSpoof, ctConfusion, cacheDeception bool) (*mutate.Registry, error) {
+// ParamPollution, OriginSpoof, ContentTypeConfusion, CacheDeception, and
+// PrototypePollution are always registered but inert in their disabled state,
+// so the canonical DefaultRegistry order (and the order test) stays unchanged.
+func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, xxe, graphql, forbidBypass, wsHijack, csrfHeader, methodOverride, hostHeader, cookieTamper, headerInjection, paramPollution, originSpoof, ctConfusion, cacheDeception, protoPollution bool) (*mutate.Registry, error) {
 	enumMutator := mutate.EnumerateID{N: enumerateN}
 	jwtAuthMutator := mutate.JWTAuth{Enabled: jwtAttack}
 	massAssignMutator := mutate.MassAssign{Enabled: massAssign}
@@ -1265,15 +1269,16 @@ func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, x
 	originSpoofMutator := mutate.OriginSpoof{Enabled: originSpoof}
 	ctConfusionMutator := mutate.ContentTypeConfusion{Enabled: ctConfusion}
 	cacheDeceptionMutator := mutate.CacheDeception{Enabled: cacheDeception}
+	protoPollutionMutator := mutate.PrototypePollution{Enabled: protoPollution}
 
 	if wordlistPath == "" {
 		// Extend the default registry with EnumerateID + JWTAuth +
 		// MassAssign + XXE + GraphQL + ForbiddenBypass + WSHijack + CSRFHeader +
 		// MethodOverride + HostHeader + CookieTamper + HeaderInjection +
-		// ParamPollution + OriginSpoof + ContentTypeConfusion + CacheDeception
-		// (all no-op when disabled).
+		// ParamPollution + OriginSpoof + ContentTypeConfusion + CacheDeception +
+		// PrototypePollution (all no-op when disabled).
 		base := mutate.DefaultRegistry()
-		all := append(base.All(), enumMutator, jwtAuthMutator, massAssignMutator, xxeMutator, graphqlMutator, forbidMutator, wsHijackMutator, csrfHeaderMutator, methodOverrideMutator, hostHeaderMutator, cookieTamperMutator, headerInjectionMutator, paramPollutionMutator, originSpoofMutator, ctConfusionMutator, cacheDeceptionMutator)
+		all := append(base.All(), enumMutator, jwtAuthMutator, massAssignMutator, xxeMutator, graphqlMutator, forbidMutator, wsHijackMutator, csrfHeaderMutator, methodOverrideMutator, hostHeaderMutator, cookieTamperMutator, headerInjectionMutator, paramPollutionMutator, originSpoofMutator, ctConfusionMutator, cacheDeceptionMutator, protoPollutionMutator)
 		return mutate.NewRegistry(all...), nil
 	}
 	data, err := os.ReadFile(wordlistPath)
@@ -1316,6 +1321,7 @@ func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, x
 		originSpoofMutator,
 		ctConfusionMutator,
 		cacheDeceptionMutator,
+		protoPollutionMutator,
 	), nil
 }
 

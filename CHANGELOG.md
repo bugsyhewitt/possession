@@ -9,6 +9,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Prototype-pollution mutator** (`--prototype-pollution`,
+  `internal/mutate/prototype_pollution.go`): a new mutator in the
+  privilege-escalation family targeting the canonical Node.js / browser
+  prototype-pollution authz-bypass class (CVE-2018-3721 lodash,
+  CVE-2019-10744 lodash, CVE-2019-11358 jQuery, and the 2024 Express
+  qs/parseUrl chains; OWASP "Prototype Pollution Prevention" cheat sheet).
+  Where `--mass-assign` attacks *which top-level properties the model
+  binds* (server-side BOPLA at the object layer — set `is_admin` on the
+  model instance), `--prototype-pollution` attacks *which properties
+  every object in the JavaScript runtime inherits* (set `is_admin` on
+  Object.prototype so every object answers `true` for it) — a distinct
+  authz-bypass class with a distinct fix. A backend that deep-merges
+  attacker-controlled JSON (lodash `_.merge`, `_.defaultsDeep`,
+  `$.extend(true, …)`, mongoose, hand-rolled recursive Object.assign)
+  walks past the `__proto__` / `constructor` / `prototype` keys it
+  should be guarding and writes onto Object.prototype; every subsequent
+  object the process creates inherits the polluted property and a
+  downstream authz check that reads `req.user.is_admin` finds `true`
+  even though the request never legitimately granted it. For each
+  privileged property in the canonical set
+  (`PrivilegedProperties` — `admin`, `is_admin`, `isAdmin`, `role`,
+  `roles`, `verified`, shared with `--mass-assign` so the same
+  authz-bypass surface is exercised against the prototype layer) and
+  each of the three pollution vectors, a separate variant is emitted in
+  deterministic sorted-by-field then sorted-by-vector order:
+  `__proto__` (`{"__proto__": {key: value}}` — the direct CVE-2018-3721
+  vector); `constructor.prototype`
+  (`{"constructor": {"prototype": {key: value}}}` — every object's
+  `constructor` is a function whose `.prototype` IS Object.prototype, so
+  this bypasses guards that block only the literal `__proto__` key); and
+  `prototype` (`{"prototype": {key: value}}` — the bare alias used by
+  mongoose / handlebars / some hand-rolled merges that walk a key
+  literally named `prototype` as data, a third pathway documented across
+  the npm-ecosystem CVE chain). Every variant keeps the caller's own
+  credentials (`Identity == nil` — credentials unchanged) and preserves
+  the caller's own top-level body fields verbatim; the pollution
+  payload is *added* alongside them, never replaces. Arrays, scalars,
+  and non-JSON bodies emit no variants — there is nothing for a JSON
+  deep-merge helper to recurse into. If the caller's own body already
+  contains a top-level `__proto__` / `constructor` / `prototype` key
+  (vanishingly rare in real traffic), that specific vector is skipped
+  for that input. Pure and deterministic — the property and vector
+  sweeps both sort at call time — so `--dry-run` and the offline corpus
+  cover it for free. Findings are class `privesc`. Off by default: the
+  polluted JSON reaches deep-merge code paths whose effect is
+  *process-wide* (the entire Node.js process answers the polluted
+  property thereafter — including for every concurrent user — until the
+  runtime restarts), so it only fires when the operator opts in,
+  mirroring the gating of `--mass-assign` (its top-level counterpart)
+  and the rest of the off-by-default mutator family. Wired through
+  `buildRegistry`; the mutator is always registered (inert when
+  disabled) so the canonical `DefaultRegistry` order and the order test
+  stay unchanged. Covered by 13 new tests across
+  `internal/mutate/prototype_pollution_test.go` and
+  `internal/cli/buildregistry_forbidden_test.go` — disabled-by-default
+  contract, full cross-product cell coverage (every property × every
+  vector emitted exactly once), per-vector body-shape invariants
+  (`__proto__.key`, `constructor.prototype.key`, `prototype.key`
+  reachable at the correct path; the polluted field NOT leaked to the
+  top level, keeping the mutator disjoint from `--mass-assign`),
+  caller-field preservation, non-JSON / array / empty body skip,
+  already-present vector-key skip, determinism (field-outer/vector-inner
+  monotonic sweep), credentials-unchanged contract, body
+  non-aliasing, `Name()` stability for the allowlist, the
+  not-in-`DefaultRegistry` contract, and the gating end-to-end through
+  `buildRegistry` (both wordlist-on and wordlist-off paths).
+
 - **Web Cache Deception mutator** (`--cache-deception`,
   `internal/mutate/cache_deception.go`): a new mutator in the
   access-control bypass family targeting the canonical Web Cache Deception
