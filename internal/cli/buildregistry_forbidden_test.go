@@ -27,7 +27,7 @@ func protectedScanReq() *model.CapturedRequest {
 // flows through buildRegistry: the mutator is always registered, but only
 // emits variants when the flag is set.
 func TestBuildRegistry_ForbiddenBypassGating(t *testing.T) {
-	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
+	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry off: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestBuildRegistry_ForbiddenBypassGating(t *testing.T) {
 		t.Fatalf("forbidden-bypass must always be registered, even when disabled")
 	}
 
-	regOn, err := buildRegistry("", 0, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false)
+	regOn, err := buildRegistry("", 0, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry on: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestBuildRegistry_ForbiddenBypassWithWordlist(t *testing.T) {
 	if err := os.WriteFile(f, []byte("secret\n"), 0o644); err != nil {
 		t.Fatalf("write wordlist: %v", err)
 	}
-	reg, err := buildRegistry(f, 0, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false)
+	reg, err := buildRegistry(f, 0, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry with wordlist: %v", err)
 	}
@@ -93,7 +93,7 @@ func wsScanReq() *model.CapturedRequest {
 // buildRegistry: the mutator is always registered, but only emits variants when
 // the flag is set.
 func TestBuildRegistry_WSHijackGating(t *testing.T) {
-	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
+	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry off: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestBuildRegistry_WSHijackGating(t *testing.T) {
 		t.Errorf("disabled ws-hijack emitted %d variants; want 0", len(vs))
 	}
 
-	regOn, err := buildRegistry("", 0, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false)
+	regOn, err := buildRegistry("", 0, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry on: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestBuildRegistry_WSHijackWithWordlist(t *testing.T) {
 	if err := os.WriteFile(f, []byte("secret\n"), 0o644); err != nil {
 		t.Fatalf("write wordlist: %v", err)
 	}
-	reg, err := buildRegistry(f, 0, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false)
+	reg, err := buildRegistry(f, 0, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry with wordlist: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestBuildRegistry_WSHijackWithWordlist(t *testing.T) {
 // through buildRegistry: the mutator is always registered, but only emits
 // variants when the flag is set.
 func TestBuildRegistry_MethodOverrideGating(t *testing.T) {
-	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
+	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry off: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestBuildRegistry_MethodOverrideGating(t *testing.T) {
 		t.Errorf("disabled method-override emitted %d variants; want 0", len(vs))
 	}
 
-	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false)
+	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry on: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestBuildRegistry_MethodOverrideWithWordlist(t *testing.T) {
 	if err := os.WriteFile(f, []byte("secret\n"), 0o644); err != nil {
 		t.Fatalf("write wordlist: %v", err)
 	}
-	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false)
+	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry with wordlist: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestBuildRegistry_MethodOverrideWithWordlist(t *testing.T) {
 // buildRegistry: the mutator is always registered, but only emits variants when
 // the flag is set.
 func TestBuildRegistry_HostHeaderGating(t *testing.T) {
-	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
+	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry off: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestBuildRegistry_HostHeaderGating(t *testing.T) {
 		t.Errorf("disabled host-header emitted %d variants; want 0", len(vs))
 	}
 
-	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false)
+	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry on: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestBuildRegistry_HostHeaderWithWordlist(t *testing.T) {
 	if err := os.WriteFile(f, []byte("secret\n"), 0o644); err != nil {
 		t.Fatalf("write wordlist: %v", err)
 	}
-	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false)
+	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry with wordlist: %v", err)
 	}
@@ -249,7 +249,7 @@ func cookieScanReq() *model.CapturedRequest {
 // through buildRegistry: the mutator is always registered, but only emits
 // variants when the flag is set.
 func TestBuildRegistry_CookieTamperGating(t *testing.T) {
-	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
+	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry off: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestBuildRegistry_CookieTamperGating(t *testing.T) {
 		t.Errorf("disabled cookie-tamper emitted %d variants; want 0", len(vs))
 	}
 
-	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false)
+	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry on: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestBuildRegistry_CookieTamperWithWordlist(t *testing.T) {
 	if err := os.WriteFile(f, []byte("secret\n"), 0o644); err != nil {
 		t.Fatalf("write wordlist: %v", err)
 	}
-	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false)
+	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry with wordlist: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestBuildRegistry_CookieTamperWithWordlist(t *testing.T) {
 // flows through buildRegistry: the mutator is always registered, but only emits
 // variants when the flag is set.
 func TestBuildRegistry_HeaderInjectionGating(t *testing.T) {
-	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
+	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry off: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestBuildRegistry_HeaderInjectionGating(t *testing.T) {
 		t.Errorf("disabled header-injection emitted %d variants; want 0", len(vs))
 	}
 
-	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false)
+	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry on: %v", err)
 	}
@@ -327,7 +327,7 @@ func TestBuildRegistry_HeaderInjectionWithWordlist(t *testing.T) {
 	if err := os.WriteFile(f, []byte("secret\n"), 0o644); err != nil {
 		t.Fatalf("write wordlist: %v", err)
 	}
-	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false)
+	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry with wordlist: %v", err)
 	}
@@ -357,7 +357,7 @@ func pollutionScanReq() *model.CapturedRequest {
 // flows through buildRegistry: the mutator is always registered, but only emits
 // variants when the flag is set.
 func TestBuildRegistry_ParamPollutionGating(t *testing.T) {
-	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
+	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry off: %v", err)
 	}
@@ -368,7 +368,7 @@ func TestBuildRegistry_ParamPollutionGating(t *testing.T) {
 		t.Errorf("disabled parameter-pollution emitted %d variants; want 0", len(vs))
 	}
 
-	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false)
+	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry on: %v", err)
 	}
@@ -388,7 +388,7 @@ func TestBuildRegistry_ParamPollutionWithWordlist(t *testing.T) {
 	if err := os.WriteFile(f, []byte("secret\n"), 0o644); err != nil {
 		t.Fatalf("write wordlist: %v", err)
 	}
-	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false)
+	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry with wordlist: %v", err)
 	}
@@ -421,7 +421,7 @@ func ctcScanReq() *model.CapturedRequest {
 // --content-type-confusion flag flows through buildRegistry: the mutator is
 // always registered, but only emits variants when the flag is set.
 func TestBuildRegistry_ContentTypeConfusionGating(t *testing.T) {
-	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
+	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry off: %v", err)
 	}
@@ -432,7 +432,7 @@ func TestBuildRegistry_ContentTypeConfusionGating(t *testing.T) {
 		t.Errorf("disabled content-type-confusion emitted %d variants; want 0", len(vs))
 	}
 
-	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false)
+	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry on: %v", err)
 	}
@@ -453,7 +453,7 @@ func TestBuildRegistry_ContentTypeConfusionWithWordlist(t *testing.T) {
 	if err := os.WriteFile(f, []byte("secret\n"), 0o644); err != nil {
 		t.Fatalf("write wordlist: %v", err)
 	}
-	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false)
+	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry with wordlist: %v", err)
 	}
@@ -484,7 +484,7 @@ func cdScanReq() *model.CapturedRequest {
 // flows through buildRegistry: the mutator is always registered, but only
 // emits variants when the flag is set.
 func TestBuildRegistry_CacheDeceptionGating(t *testing.T) {
-	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
+	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry off: %v", err)
 	}
@@ -495,7 +495,7 @@ func TestBuildRegistry_CacheDeceptionGating(t *testing.T) {
 		t.Errorf("disabled cache-deception emitted %d variants; want 0", len(vs))
 	}
 
-	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false)
+	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry on: %v", err)
 	}
@@ -515,7 +515,7 @@ func TestBuildRegistry_CacheDeceptionWithWordlist(t *testing.T) {
 	if err := os.WriteFile(f, []byte("secret\n"), 0o644); err != nil {
 		t.Fatalf("write wordlist: %v", err)
 	}
-	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false)
+	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry with wordlist: %v", err)
 	}
@@ -549,7 +549,7 @@ func ppScanReq() *model.CapturedRequest {
 // flag flows through buildRegistry: the mutator is always registered, but
 // only emits variants when the flag is set.
 func TestBuildRegistry_PrototypePollutionGating(t *testing.T) {
-	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
+	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry off: %v", err)
 	}
@@ -560,7 +560,7 @@ func TestBuildRegistry_PrototypePollutionGating(t *testing.T) {
 		t.Errorf("disabled prototype-pollution emitted %d variants; want 0", len(vs))
 	}
 
-	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false)
+	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry on: %v", err)
 	}
@@ -581,7 +581,7 @@ func TestBuildRegistry_PrototypePollutionWithWordlist(t *testing.T) {
 	if err := os.WriteFile(f, []byte("secret\n"), 0o644); err != nil {
 		t.Fatalf("write wordlist: %v", err)
 	}
-	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false)
+	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry with wordlist: %v", err)
 	}
@@ -613,7 +613,7 @@ func ptScanReq() *model.CapturedRequest {
 // flows through buildRegistry: the mutator is always registered, but only
 // emits variants when the flag is set.
 func TestBuildRegistry_PathTraversalGating(t *testing.T) {
-	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
+	regOff, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry off: %v", err)
 	}
@@ -624,7 +624,7 @@ func TestBuildRegistry_PathTraversalGating(t *testing.T) {
 		t.Errorf("disabled path-traversal emitted %d variants; want 0", len(vs))
 	}
 
-	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false)
+	regOn, err := buildRegistry("", 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry on: %v", err)
 	}
@@ -645,7 +645,7 @@ func TestBuildRegistry_PathTraversalWithWordlist(t *testing.T) {
 	if err := os.WriteFile(f, []byte("secret\n"), 0o644); err != nil {
 		t.Fatalf("write wordlist: %v", err)
 	}
-	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false)
+	reg, err := buildRegistry(f, 0, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, false)
 	if err != nil {
 		t.Fatalf("buildRegistry with wordlist: %v", err)
 	}
