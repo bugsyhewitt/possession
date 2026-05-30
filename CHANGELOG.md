@@ -9,6 +9,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Web Cache Deception mutator** (`--cache-deception`,
+  `internal/mutate/cache_deception.go`): a new mutator in the
+  access-control bypass family targeting the canonical Web Cache Deception
+  class (Omer Gil, BlackHat 2017; refreshed in the 2024–2026 BlackHat
+  Cache-Confusion / CDN-Confusion research). Where
+  `--content-type-confusion` attacks *which body parser each layer
+  chooses*, `--forbidden-bypass` attacks *how the path is matched against
+  a deny rule*, and `--host-header` attacks *which host the gate evaluates*,
+  `--cache-deception` attacks *which storage tier sees the response* — the
+  URL is decorated with cacheable file-extension shapes (`.css`, `.js`,
+  `.png`, `.jpg`, `.ico`, `.gif`, `.svg`) that a fronting CDN / edge cache
+  stores by default, while the application router strips, ignores, or
+  normalises away the decoration and still returns the caller's personal
+  response. The cache stores that personal response under a public-looking
+  key, exposing it to every later caller. Four disjoint technique shapes,
+  each cross-producted with the cacheable extension set in deterministic
+  sorted-by-name order: `path-suffix` (`/api/me/possession.css`, the
+  Omer-Gil original), `path-extension` (`/api/me.css`, framework-extension
+  stripping), `semicolon-suffix` (`/api/me;.css`, Tomcat / Spring
+  matrix-parameter), and `encoded-suffix` (`/api/me%2fpossession.css`,
+  gateway/router URL-normalisation desync). Every variant keeps the
+  caller's own credentials (`Identity == nil`) — this is NOT an identity
+  swap, the same caller's same fetch is decorated with a cacheable URL
+  shape so the comparative ladder can flag the candidate cache-deception
+  finding when the response remains owner-shaped. Endpoints already at a
+  cacheable extension are skipped (no-op probe); on a trailing-slash path
+  `path-extension` and `semicolon-suffix` are skipped (no terminal
+  segment), and the encoded-suffix decoded form is normalised to avoid
+  double-slashes. The mutation Detail carries `shape`, `extension`,
+  `path_from`, and `path_to` so the reporter (and any future repro-snippet
+  generator) can quote both URLs for the operator's cold-cache confirm
+  step. Findings are class `authz-bypass` (ASVS V8.3.x, severity HIGH).
+  Off by default: the decorated variants reach the caller's own personal
+  endpoints by design and observably warm the upstream cache at the
+  decorated URL on the caller's behalf — opt in via `--cache-deception`.
+  Wired through `buildRegistry`; the mutator is always registered (inert
+  when disabled) so the canonical `DefaultRegistry` order and the order
+  test stay unchanged. Covered by 17 new tests across
+  `internal/mutate/cache_deception_test.go` and
+  `internal/cli/buildregistry_forbidden_test.go` — disabled-by-default
+  contract, nil/empty/degenerate input safety, every-credentials-preserved
+  contract, full cross-product cell coverage, per-shape Path/RawPath
+  invariants (including the `%2f` un-double-encoded wire form), the
+  already-cacheable-extension skip, trailing-slash handling,
+  determinism, sorted-emission order, the `Name()` stability contract,
+  the not-in-DefaultRegistry contract, and the gating end-to-end through
+  `buildRegistry` (both wordlist-on and wordlist-off paths).
+
 - **Content-Type confusion mutator** (`--content-type-confusion`,
   `internal/mutate/content_type_confusion.go`): a new mutator in the
   access-control bypass family. Where `--parameter-pollution` attacks *which
