@@ -537,10 +537,21 @@ func runScan(cmd *cobra.Command, args []string) error {
 		// in verdictCounts).
 		filteredFindings := []model.Finding{}
 		omittedByMinConf := 0
+		reproOpts := report.ReproOptions{ShowCreds: scanReproCreds}
 		for _, f := range res.Findings {
 			if f.Confidence < scanMinConfidence {
 				omittedByMinConf++
 				continue
+			}
+			// Pre-render the copy-paste reproduction while f.Variant is still
+			// live (Variant is json:"-" and will not survive serialization).
+			// Populate model.Finding.Repro so it appears in the JSON report.
+			if rp, ok := report.BuildRepro(f, reproOpts); ok {
+				f.Repro = &model.FindingRepro{
+					HTTP:         rp.HTTP,
+					Curl:         rp.Curl,
+					Differential: rp.Differential,
+				}
 			}
 			filteredFindings = append(filteredFindings, f)
 		}

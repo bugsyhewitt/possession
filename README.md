@@ -1250,6 +1250,22 @@ runs on the same input — safe for diffing and hashing. The shape is
 the `model.RunResult` aggregate (see
 [`internal/model/run.go`](internal/model/run.go)).
 
+Each finding now includes a `repro` object with the copy-paste
+reproduction rendered while the in-memory variant is live:
+
+```json
+"repro": {
+  "http":         "POST /users/1001 HTTP/1.1\nAuthorization: <bearer:bob>\n…",
+  "curl":         "curl -X POST -H 'Authorization: <bearer:bob>' 'https://…'",
+  "differential": "baseline 200 → variant 200 · similarity 0.97 · Δsize 0"
+}
+```
+
+Credential values are **redacted to identity-tagged placeholders** by
+default (`<bearer:bob>`); add `--repro-creds` to emit live tokens.
+Findings without a recoverable in-memory request (e.g. deserialized
+results from `--replay`) omit the `repro` key.
+
 ### `--report sarif`
 
 SARIF 2.1.0, suitable for GitHub Code Scanning. One rule per finding

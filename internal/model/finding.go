@@ -25,6 +25,16 @@ type Finding struct {
 	ASVS     []string `json:"asvs"`     // e.g. ["v5.0.0-8.2.2"]
 	Evidence Evidence `json:"evidence"`
 
+	// Repro is the pre-rendered copy-paste reproduction for this finding:
+	// the exact mutated HTTP request (raw block + curl one-liner) plus a
+	// one-line differential of the owner-baseline vs. variant response.
+	// Populated by the scan pipeline from the in-memory Variant before
+	// serialization (Variant is not serialized). Nil when the finding
+	// carries no recoverable request (e.g. a deserialized JSON finding).
+	// Credential values are redacted to <bearer:identity> placeholders by
+	// default; set --repro-creds to emit live tokens.
+	Repro *FindingRepro `json:"repro,omitempty"`
+
 	// Convenience fields for serialization — fully derivable from
 	// Endpoint+Variant but flattened so JSON consumers don't need to
 	// cross-reference.
@@ -32,6 +42,25 @@ type Finding struct {
 	VariantID   string `json:"variant_id"`
 	Mutation    string `json:"mutation"`
 	Identity    string `json:"identity,omitempty"`
+}
+
+// FindingRepro is the pre-rendered reproduction payload embedded in a Finding.
+// Fields mirror report.Repro but live in the model package so they can be
+// serialized by the JSON reporter without an import cycle (report → model is
+// fine; model → report would cycle).
+type FindingRepro struct {
+	// HTTP is the raw HTTP/1.1 request block: request line + sorted headers +
+	// Cookie + blank line + body. Credential header values are redacted to
+	// <bearer:identity> placeholders unless --repro-creds was set.
+	HTTP string `json:"http"`
+
+	// Curl is the equivalent single-line curl command, shell-quoted for direct
+	// paste into a terminal.
+	Curl string `json:"curl"`
+
+	// Differential is the compact baseline→variant summary:
+	// "baseline 200 → variant 200 · similarity 0.97 · Δsize 0".
+	Differential string `json:"differential"`
 }
 
 // Evidence captures the observed signals that justified a Finding.
