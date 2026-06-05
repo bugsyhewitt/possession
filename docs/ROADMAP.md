@@ -47,8 +47,10 @@ Items deliberately left out of v1.0 to keep the scope bounded:
 ### Detection / evaluator
 - AuthMatrix-style declarative evaluator (the `Evaluator` interface
   seam in `internal/detect/evaluator.go` is ready for it).
-- Activate `idor-cross-tenant` (D31): add a per-identity `tenant`
-  field to the role-matrix schema so the dormant code path can fire.
+- ~~Activate `idor-cross-tenant` (D31): add a per-identity `tenant`
+  field to the role-matrix schema so the dormant code path can fire.~~
+  **Shipped** (P8): `Identity.Tenant` field in role-matrix schema; cross-tenant
+  swaps automatically emit `idor-cross-tenant` class (critical severity).
 - Distinguish "denied" from "different resource" at the low-similarity
   end of the ladder (current v1.0 limitation, see branch 10 of
   `internal/detect/evaluate.go`).
@@ -60,14 +62,18 @@ Items deliberately left out of v1.0 to keep the scope bounded:
   Off by default, rate-sensitive; mutually exclusive with `--replay`.
 
 ### JWT (deeper attacks)
-- RS256→HS256 alg-confusion (sign attacker key with server's public
-  key as HMAC secret).
-- `kid` injection (path traversal, SQL injection, command injection
-  via the `kid` header).
-- JKU / x5u / JWK spoofing (point the verifier at attacker-controlled
-  JWKS).
-- HMAC secret cracking against captured tokens (offline dictionary +
-  rule-based mutation).
+- ~~RS256→HS256 alg-confusion (sign attacker key with server's public
+  key as HMAC secret).~~ **Shipped** (`--jwt-alg-confusion`).
+- ~~`kid` injection (path traversal, SQL injection, command injection
+  via the `kid` header).~~ **Shipped** (`jwt-kid-injection`, always-on
+  when a JWT is detected; 6 payloads across path-traversal and sqli classes).
+- ~~JKU / x5u / JWK spoofing (point the verifier at attacker-controlled
+  JWKS).~~ **Shipped** (`jwt-jwks-spoof`): inline `jwk` header embed and
+  `jku` redirect-to-attacker-URL variants per token location.
+- ~~HMAC secret cracking against captured tokens (offline dictionary +
+  rule-based mutation).~~ **Shipped** (`jwt-hmac-crack`): 16-entry default
+  wordlist, cracked secret re-signs with role=admin escalation, capped at
+  500 attempts per token location.
 
 ### Input formats
 - ~~Postman collection v2 parser.~~ **Shipped.**
@@ -88,7 +94,10 @@ Items deliberately left out of v1.0 to keep the scope bounded:
   traces).~~ **Shipped** (`--report html`): single self-contained
   document, severity-grouped findings, collapsible repro blocks,
   progressive-enhancement severity filter.
-- Markdown reporter for PR comments.
+- ~~Markdown reporter for PR comments.~~ **Shipped** (`--report markdown`):
+  GitHub-flavored Markdown, impact-first, per-finding collapsible repro
+  blocks (raw HTTP + curl), severity-grouped, credentials redacted by
+  default (`--repro-creds` to show live tokens).
 - ~~Suppression / baseline file (`possession.allowlist`) so re-runs only
   surface new findings.~~ **Shipped in v1.2.**
 

@@ -86,7 +86,7 @@ The 2026 BOLA workflow is API-first, and the bottleneck is *coverage* — you ca
 
 ---
 
-## Item 4 — Per-finding HTTP/curl reproduction in reporters (Priority: HIGH)
+## Item 4 — Per-finding HTTP/curl reproduction in reporters (Priority: HIGH) — ✅ IMPLEMENTED (r36)
 
 ### What
 For every finding, emit a ready-to-paste reproduction: the exact request that triggered the bypass (method, URL, headers with credentials redacted or templated) as both a raw HTTP block and a `curl` one-liner, plus the differential (owner baseline vs. variant response: status, size, marker hit).
@@ -101,6 +101,16 @@ Low-Medium (120–180K). No new analysis; it's a presentation-layer feature over
 
 ### Rationale
 A finding a hunter can't reproduce is a finding they can't submit. The most-repeated reporting lesson in the surveyed workflows is "impact-first, copy-paste PoC." Burp gives you the request inline; possession currently makes you reconstruct it from JSON. This is high value at low cost — pure leverage on existing data — and the Markdown reporter directly serves the PR-comment / report-writing use case the README already flags as backlog. Just below the detection items because it amplifies findings rather than producing new ones.
+
+Shipped in two parts: `--report markdown` (PR-ready GFM, shipped r33) and `--report html`
+(self-contained interactive report, shipped r34). Per r36 this item is fully complete: the
+JSON reporter now embeds a `repro` object on every finding (`model.Finding.Repro`, populated
+from `report.BuildRepro` while the in-memory `Variant` is live). The three repro fields —
+`http` (raw HTTP/1.1 request block), `curl` (single-line shell command), and `differential`
+(`baseline N → variant N · similarity S · ΔsizeD`) — appear in the `--report json` output
+so downstream consumers and triage tooling can copy-paste reproductions without requiring a
+markdown or HTML render pass. Credential values are redacted to `<bearer:identity>`
+placeholders by default; `--repro-creds` emits live tokens.
 
 ---
 

@@ -271,3 +271,114 @@ func TestSARIF_RoundTripContent(t *testing.T) {
 		t.Fatalf("re-parse: %v", err)
 	}
 }
+
+// ─── JSON repro block (POST_V01 Item 4, r36) ──────────────────────────────
+
+// mkRunWithReproBlock returns a RunResult with one finding that carries a
+// populated model.FindingRepro block (simulating what scan.go populates from
+// report.BuildRepro before the Variant pointer is dropped).
+func mkRunWithReproBlock() *model.RunResult {
+	run := mkRun()
+	// Inject a Repro block into the first finding to mirror what scan.go sets.
+	run.Findings[0].Repro = &model.FindingRepro{
+		HTTP:         "POST /users/1001 HTTP/1.1\nHost: api.example.com\nAuthorization: <bearer:bob>\n\n{\"note\":\"test\"}",
+		Curl:         "curl -X POST -H 'Authorization: <bearer:bob>' 'https://api.example.com/users/1001'",
+		Differential: "baseline 200 → variant 200 · similarity 0.97 · Δsize 0",
+	}
+	return run
+}
+
+func TestJSON_FindingWithRepro_ContainsReproBlock(t *testing.T) {
+	// A finding with Repro set must produce a "repro" object in JSON output.
+	var buf bytes.Buffer
+	if err := (JSONReporter{}).Render(mkRunWithReproBlock(), &buf); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	out := buf.String()
+
+	// Top-level repro key must be present.
+	if !strings.Contains(out, `"repro"`) {
+		t.Errorf("JSON output missing top-level repro key:\n%s", out)
+	}
+	// All three sub-fields must appear.
+	for _, field := range []string{`"http"`, `"curl"`, `"differential"`} {
+		if !strings.Contains(out, field) {
+			t.Errorf("JSON output missing repro field %s:\n%s", field, out)
+		}
+	}
+	// The redacted placeholder must appear in the HTTP block.
+	if !strings.Contains(out, "<bearer:bob>") {
+		t.Errorf("repro HTTP block missing identity placeholder:\n%s", out)
+	}
+}
+
+func TestJSON_FindingWithoutRepro_NoReproKey(t *testing.T) {
+	// A finding whose Repro is nil (no recoverable request) must NOT emit a
+	// "repro" key in JSON — the omitempty tag should suppress it.
+	var buf bytes.Buffer
+	if err := (JSONReporter{}).Render(mkRun(), &buf); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	// mkRun() findings have no Repro set.
+	if strings.Contains(buf.String(), `"repro"`) {
+		t.Errorf("JSON output should not include repro for findings without Repro set:\n%s", buf.String())
+	}
+}
+
+func TestJSON_ReproStable_ByteIdentical(t *testing.T) {
+	// Repro-containing output must be byte-identical across two renders
+	// (D26 determinism extends to the new field).
+	r := JSONReporter{}
+	run := mkRunWithReproBlock()
+	var a, b bytes.Buffer
+	if err := r.Render(run, &a); err != nil {
+		t.Fatalf("first render: %v", err)
+	}
+	if err := r.Render(run, &b); err != nil {
+		t.Fatalf("second render: %v", err)
+	}
+	if a.String() != b.String() {
+		t.Errorf("JSON repro output not stable across two renders")
+	}
+}
+
+func TestJSON_Repro_ValidJSON(t *testing.T) {
+	// The full JSON output with a repro block must parse as valid JSON and
+	// the repro sub-object must have the expected shape.
+	var buf bytes.Buffer
+	if err := (JSONReporter{}).Render(mkRunWithReproBlock(), &buf); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	var parsed struct {
+		Findings []struct {
+			Repro *struct {
+				HTTP         string `json:"http"`
+				Curl         string `json:"curl"`
+				Differential string `json:"differential"`
+			} `json:"repro"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(parsed.Findings) == 0 {
+		t.Fatal("no findings in parsed output")
+	}
+	f0 := parsed.Findings[0]
+	if f0.Repro == nil {
+		t.Fatal("first finding has nil repro; expected populated repro block")
+	}
+	if f0.Repro.HTTP == "" {
+		t.Error("repro.http is empty")
+	}
+	if f0.Repro.Curl == "" {
+		t.Error("repro.curl is empty")
+	}
+	if f0.Repro.Differential == "" {
+		t.Error("repro.differential is empty")
+	}
+	// Second finding (no Repro) must parse without a repro key (nil pointer).
+	if len(parsed.Findings) > 1 && parsed.Findings[1].Repro != nil {
+		t.Error("second finding unexpectedly has a repro block; expected nil")
+	}
+}
