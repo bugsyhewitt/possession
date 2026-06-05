@@ -187,14 +187,59 @@ func TestLadder_Branch9_MidSimilarity(t *testing.T) {
 	}
 }
 
-// Branch 10: very low similarity ⇒ enforced
-func TestLadder_Branch10_LowSimilarity(t *testing.T) {
+// Branch 9b: a resource-swap variant that draws a low-similarity 2xx with a
+// non-denial body is a *different-resource* hit ⇒ suspected (not silently
+// swallowed as enforced). Closes the D44 / v1.1 "cannot distinguish denied
+// from different resource" false negative.
+func TestLadder_Branch9b_DifferentResourceIsSuspected(t *testing.T) {
 	cal := mkCal(NormalizeBody([]byte(`{"name":"alice","items":["a","b","c","d","e","f","g","h"]}`), "application/json"), 200, false, false, false, 0.85)
-	// Completely different body.
+	// 200 OK, body diverges entirely from the owner baseline but is NOT
+	// denial-shaped — a different successful resource came back.
 	vr := mkVR("swap-identity", nil, 200, `xxx yyy zzz www vvv uuu ttt sss rrr qqq`, "text/plain", false, "")
 	vv := runLadder(t, cal, nil, vr)
+	if vv.Verdict != VerdictSuspected {
+		t.Errorf("want suspected (different-resource 2xx), got %s notes=%v", vv.Verdict, vv.Notes)
+	}
+	if vv.Confidence != DiffResourceConfidence {
+		t.Errorf("want confidence %v, got %v", DiffResourceConfidence, vv.Confidence)
+	}
+}
+
+// Branch 9b is scoped to resource-swap mutators. A low-similarity 2xx from an
+// unrelated mutator carries no object-access signal ⇒ still enforced (branch
+// 10). Guards against turning every divergent 2xx into a finding.
+func TestLadder_Branch10_NonSwapDifferentBodyStillEnforced(t *testing.T) {
+	cal := mkCal(NormalizeBody([]byte(`{"name":"alice","items":["a","b","c","d","e","f","g","h"]}`), "application/json"), 200, false, false, false, 0.85)
+	vr := mkVR("host-header", nil, 200, `xxx yyy zzz www vvv uuu ttt sss rrr qqq`, "text/plain", false, "")
+	vv := runLadder(t, cal, nil, vr)
 	if vv.Verdict != VerdictEnforced {
-		t.Errorf("want enforced (low sim), got %s notes=%v", vv.Verdict, vv.Notes)
+		t.Errorf("want enforced (non-swap mutator, no diff-resource signal), got %s notes=%v", vv.Verdict, vv.Notes)
+	}
+}
+
+// A clean denial must NOT trip branch 9b: a 403 is classified StatusDenied at
+// branch 4 and stays enforced even for a resource-swap mutator. This is the
+// secureapp Gate-E shape (cross-user read returns 403) and proves the new
+// branch does not manufacture a finding from a proper denial.
+func TestLadder_Branch9b_DeniedStatusNotDifferentResource(t *testing.T) {
+	cal := mkCal(NormalizeBody([]byte(`{"name":"alice","items":["a","b","c","d","e","f","g","h"]}`), "application/json"), 200, false, false, false, 0.85)
+	vr := mkVR("swap-object", nil, 403, `{"error":"forbidden"}`, "application/json", false, "")
+	vv := runLadder(t, cal, nil, vr)
+	if vv.Verdict != VerdictEnforced {
+		t.Errorf("want enforced (403 denial), got %s notes=%v", vv.Verdict, vv.Notes)
+	}
+}
+
+// A 2xx whose body IS denial-shaped (200-with-error-wrapper) is caught by
+// branch 5 (errorSignature) before branch 9b, so a resource-swap variant
+// returning {"error":...} at 200 stays enforced rather than being mislabeled
+// a different-resource hit.
+func TestLadder_Branch9b_2xxErrorWrapperNotDifferentResource(t *testing.T) {
+	cal := mkCal(NormalizeBody([]byte(`{"name":"alice","items":["a","b","c","d","e","f","g","h"]}`), "application/json"), 200, false, false, false, 0.85)
+	vr := mkVR("swap-object", nil, 200, `{"error":"forbidden"}`, "application/json", false, "")
+	vv := runLadder(t, cal, nil, vr)
+	if vv.Verdict != VerdictEnforced {
+		t.Errorf("want enforced (2xx error wrapper), got %s notes=%v", vv.Verdict, vv.Notes)
 	}
 }
 
