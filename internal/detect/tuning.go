@@ -106,6 +106,20 @@ const (
 	// LowConfidence is the floor used for branches that emit no finding
 	// but still report a numeric confidence (so callers can rank).
 	LowConfidence = 0.05
+
+	// DiffResourceConfidence is the confidence for a different-resource
+	// finding (branch 9b): a cross-identity / cross-resource variant that
+	// drew a 2xx whose body is NOT denial-shaped but diverges from the
+	// owner baseline (similarity < SuspectLow). The server returned a
+	// *successful but different* resource to the actor — a candidate
+	// horizontal-IDOR to a different object the caller may not be entitled
+	// to, distinct from a clean denial. Confidence is deliberately low: the
+	// divergent body means this is a lead to triage, not a confirmed bypass,
+	// and ClassifyConfidenceBand keeps it in the `low` band because the body
+	// does not resemble the owner's resource. Set just above SuspectedConfMin's
+	// floor sibling LowConfidence so it ranks above no-finding branches but
+	// well below a same-shape suspected (branch 9).
+	DiffResourceConfidence = 0.20
 )
 
 // ─── BOLA confidence band (POST_V01 Item 5) ───────────────────────────

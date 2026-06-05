@@ -329,14 +329,57 @@ func (ev ComparativeEvaluator) judge(vr VariantResponse, owner *model.Identity, 
 		return vv
 	}
 
+	// Branch 9b: similarity < SuspectLow, but the response is a 2xx whose
+	// body is NOT denial-shaped (errSig already false here — branch 5 caught
+	// the 2xx-with-denial-body case) AND the mutation is a cross-identity /
+	// cross-resource access test (swap-identity / swap-object). The server
+	// answered with a *successful but different* resource than the owner
+	// baseline: not a denial (those are 4xx ⇒ branch 4, or 2xx-error-body ⇒
+	// branch 5), but a different object the actor may not be entitled to.
+	// This is the "different resource class" case the comparative ladder
+	// historically swallowed as enforced (the D44 / v1.1 false negative).
+	// Surface it as `suspected` at low confidence so a real horizontal-IDOR
+	// to a distinct object isn't silently dropped, while the divergent body
+	// keeps it out of the high/medium confidence bands (ClassifyConfidenceBand
+	// caps it at `low`). Scoped to swap mutators only: a low-similarity 2xx
+	// from an unrelated mutator (host-header, csrf-header, …) is not an
+	// object-access signal and stays enforced at branch 10.
+	if sc == StatusSuccess && isResourceSwap(v) {
+		vv.Verdict = VerdictSuspected
+		vv.Confidence = DiffResourceConfidence
+		vv.Notes = append(vv.Notes, fmt.Sprintf("similarity %.2f below suspect floor %.2f but 2xx non-denial body ⇒ different-resource access (suspected horizontal IDOR to a distinct object)", sim, SuspectLow))
+		return vv
+	}
+
 	// Branch 10: similarity < SuspectLow ⇒ enforced (low confidence).
-	// Known v1.1 limitation: a different-but-still-unauthorized resource
-	// lands here. We accept the false negative rather than the false
-	// positive cost.
+	// Reached when the divergent 2xx is not from a resource-swap mutator, or
+	// the status is not a clean 2xx — i.e. there is no positive signal that
+	// the actor obtained a different resource. A genuine denial (4xx, or a
+	// 2xx error wrapper) was already classified enforced upstream (branches
+	// 4 / 5); this branch covers the remaining "different and uninteresting"
+	// tail. The resource-swap different-resource case is handled by branch 9b.
 	vv.Verdict = VerdictEnforced
 	vv.Confidence = LowConfidence
-	vv.Notes = append(vv.Notes, fmt.Sprintf("similarity %.2f below suspect floor %.2f ⇒ enforced (v1.1 limitation: cannot distinguish 'denied' from 'different resource')", sim, SuspectLow))
+	vv.Notes = append(vv.Notes, fmt.Sprintf("similarity %.2f below suspect floor %.2f ⇒ enforced (no different-resource signal for this mutation)", sim, SuspectLow))
 	return vv
+}
+
+// isResourceSwap reports whether a variant's mutation is a cross-identity or
+// cross-resource object-access test (swap-identity / swap-object) — the
+// mutators for which a successful-but-divergent 2xx response is a meaningful
+// horizontal-IDOR signal (branch 9b). Other mutators returning a different
+// body carry no object-access semantics and are not treated as different-
+// resource hits.
+func isResourceSwap(v *model.Variant) bool {
+	if v == nil {
+		return false
+	}
+	switch v.Mutation.Type {
+	case "swap-identity", "swap-object":
+		return true
+	default:
+		return false
+	}
 }
 
 func identityOf(v *model.Variant) *model.Identity {
