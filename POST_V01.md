@@ -30,7 +30,7 @@ and `buildRegistry` in `internal/cli/scan.go`.
 
 ---
 
-## Item 1 — Resource-reference swap mutator (`swap-object`) (Priority: CRITICAL)
+## Item 1 — Resource-reference swap mutator (`swap-object`) (Priority: CRITICAL) — ✅ IMPLEMENTED
 
 ### What
 A new mutator that, instead of (or in addition to) swapping the *identity*, swaps the *object reference* in the request — path identifier segments (`/api/users/{id}`), query params (`?account_id=`), and JSON body fields — substituting another identity's known resource IDs while keeping the original caller's credentials. This is the textbook horizontal-IDOR / BOLA test: "can alice, using alice's own valid token, read bob's object?" possession currently cannot express this at all.
@@ -49,7 +49,7 @@ This is the #1 gap. Every IDOR write-up surveyed describes the same loop — log
 
 ---
 
-## Item 2 — Sequential ID enumeration mutator (`enumerate-id`) (Priority: HIGH)
+## Item 2 — Sequential ID enumeration mutator (`enumerate-id`) (Priority: HIGH) — ✅ IMPLEMENTED
 
 ### What
 For endpoints with a numeric or short-sequential identifier segment, fire the *same authenticated request* across a bounded range of neighboring IDs (e.g. captured `/orders/56789` → probe `56780..56799`) and report any that return owner-shaped 2xx responses the caller should not be able to see. This is the "try 50 random IDs, count the 200s" technique from the bug-bounty workflows — distinct from Item 1's known-owner swap because it finds objects you have no a-priori reference for.
@@ -68,7 +68,7 @@ Hunters explicitly describe this as the move that surfaced "dozens of real users
 
 ---
 
-## Item 3 — OpenAPI 3.x input parser (Priority: HIGH)
+## Item 3 — OpenAPI 3.x input parser (Priority: HIGH) — ✅ IMPLEMENTED
 
 ### What
 Accept an OpenAPI/Swagger 3.x spec as scan input, synthesizing one CapturedRequest per operation (method + path + example/required params) so possession can test an entire API surface without first capturing every call in a HAR.
@@ -142,7 +142,7 @@ Marker-based detection is possession's most decisive IDOR branch (near-certain b
 
 ---
 
-## Item 6 — GraphQL operation-level authz testing (Priority: MEDIUM)
+## Item 6 — GraphQL operation-level authz testing (Priority: MEDIUM) — ✅ IMPLEMENTED
 
 ### What
 First-class GraphQL support: parse a `/graphql` POST capture (or introspection schema), generate per-operation and per-field variants, and run the identity-swap + object-swap ladder against individual queries/mutations rather than treating the whole POST as one opaque endpoint.
@@ -190,3 +190,28 @@ Medium (150–200K). The request/response data is already aggregated in `RunResu
 
 ### Rationale
 Bug-bounty programs frequently rate-limit aggressively or grant narrow scan windows; the ability to capture once and iterate detection offline is a meaningful operational advantage and de-risks tuning the new mutators from Items 1–2 without burning target requests. It also makes the test corpus richer (record real responses as fixtures). Medium because it's an operational/workflow enabler rather than a finding-producing capability — valuable, but secondary to the detection and coverage items above it.
+
+---
+
+## Item 8 — SAML assertion tamper mutator (`--saml-tamper`) — ✅ IMPLEMENTED (r37)
+
+Shipped behind `--saml-tamper`. Targets SAML SSO assertion-layer authentication
+bypasses at the HTTP POST binding layer (OWASP SAML Security Cheat Sheet /
+ASVS V3.5.3). For each captured request carrying a `SAMLResponse` form
+parameter, emits two disjoint bypass variants while keeping the caller's own
+session credentials untouched:
+
+- **signature-strip** (`saml-tamper-sig-strip`): removes the `<ds:Signature>`
+  block entirely. A service provider that grants access to an unsigned assertion
+  has disabled signature verification — finding ID `POSSESSION-SAML-SIG-STRIP`,
+  class `authn-bypass`, severity critical.
+
+- **nameid-swap** (`saml-tamper-nameid-swap`): replaces the `<saml:NameID>`
+  with a privileged target (`admin` / `administrator` / `root` / `superuser`)
+  while preserving the original signature intact. A service provider that honours
+  a NameID-swapped assertion reads identity outside the signed boundary — finding
+  ID `POSSESSION-SAML-NAMEID-SWAP`, class `authn-bypass`, severity critical.
+
+16 tests in `internal/mutate/saml_tamper_test.go`. Detection class wired via
+`internal/detect/tuning.go` (`MutatorClass`). Off by default; enable with
+`--saml-tamper`. See `CHANGELOG.md` and `internal/mutate/saml_tamper.go`.

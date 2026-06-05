@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **SAML assertion tamper mutator** (`--saml-tamper`,
+  `internal/mutate/saml_tamper.go`): a new mutator targeting SAML SSO
+  assertion-layer authentication bypasses (OWASP SAML Security Cheat
+  Sheet / ASVS V3.5.3). When a captured HTTP request carries a
+  `SAMLResponse` parameter in an `application/x-www-form-urlencoded`
+  POST body (the SAML HTTP POST binding — the standard IdP callback
+  shape for enterprise SSO), possession decodes the base64-encoded XML
+  assertion and emits two disjoint bypass variants, each keeping the
+  caller's own session credentials unchanged:
+
+  - **signature-strip** (`saml-tamper-sig-strip`): removes the
+    `<ds:Signature>` element entirely. A service provider that grants
+    access after receiving an unsigned SAML response has disabled (or
+    never configured) signature verification — any attacker who can
+    capture or replay a `SAMLResponse` can assert any identity against
+    that SP. Finding ID `POSSESSION-SAML-SIG-STRIP`, class
+    `authn-bypass`, severity critical.
+
+  - **nameid-swap** (`saml-tamper-nameid-swap`): replaces the
+    `<saml:NameID>` value (and any counterpart in `<saml:Subject>`)
+    with a candidate privileged identity (`admin`, `administrator`,
+    `root`, `superuser` — whichever differs from the captured
+    NameID), while preserving the original `<ds:Signature>` block
+    intact. A service provider that honours a NameID-swapped assertion
+    has read the identity value *outside* the signed boundary — the
+    signature covers a different NameID from the one the session was
+    issued to, yet the SP trusts the tampered value. Finding ID
+    `POSSESSION-SAML-NAMEID-SWAP`, class `authn-bypass`, severity
+    critical.
+
+  Both variants are off by default. Enable with `--saml-tamper`. The
+  mutator fires only on POST bodies with `SAMLResponse=` and is a
+  no-op on all other request shapes, so enabling it on a non-SAML
+  scan adds zero variants and no false positives. 16 tests in
+  `internal/mutate/saml_tamper_test.go`; all existing tests continue
+  to pass.
+
+  Disjoint from `--jwt-attack` (which attacks JWT Bearer tokens via
+  alg:none / blank-secret, not SAML assertion XML), `--xxe` (which
+  attacks XML *body* parsing via external entity injection, not SAML
+  binding-layer signature bypass), and `--csrf-header` (which forges
+  anti-CSRF tokens, not SAML assertions).
+
 - **Open-redirect mutator** (`--open-redirect`,
   `internal/mutate/open_redirect.go`): a new mutator targeting the
   CWE-601 / ASVS V5.1.5 unvalidated-redirect family at the
