@@ -72,6 +72,7 @@ var (
 	scanPathTraversal   bool   // --path-traversal: reshape the trailing path segment with `../` chains (literal, encoded, double-encoded, nested, null-byte-suffixed, absolute) to escape the resource scope and reach OS-sensitive files / sibling tenant directories (OWASP A01:2021 path traversal / LFI; off by default)
 	scanSSRFProbe       bool   // --ssrf-probe: rewrite URL-bearing query/body/JSON parameters to SSRF payloads (internal IPs, AWS/GCP/Azure metadata endpoints, file://, gopher://) to weaponise the server's outbound fetch (OWASP A10:2021 SSRF; off by default)
 	scanOpenRedirect    bool   // --open-redirect: rewrite redirect-destination query/body/JSON parameters (and the Referer header) to attacker-controlled URLs using URL-parser-disagreement payloads, testing for unvalidated-redirect / phishing-redirect / OAuth-token-leak primitives (CWE-601 / ASVS V5.1.5; off by default)
+	scanSAMLTamper      bool   // --saml-tamper: strip the ds:Signature element and swap the saml:NameID to a privileged value in a captured SAMLResponse POST to test SAML signature-exclusion bypass and NameID-after-validation bypass (ASVS V3.5.3; off by default)
 )
 
 // scanCmd is the end-to-end scan command. Packets 1-3 contribute:
@@ -167,6 +168,8 @@ func init() {
 		"test Server-Side Request Forgery using the caller's own credentials: for each URL-bearing query parameter, urlencoded body parameter, and top-level JSON string field (matched by name — url, uri, redirect, callback, webhook, target, dest, endpoint, next, return, src, host, image, fetch — or by value parsing as an absolute http(s) URL), rewrite the value to seven disjoint SSRF payloads spanning internal-network probes (loopback 127.0.0.1, RFC1918 10.0.0.1), cloud-provider instance-metadata endpoints (AWS IMDSv1 169.254.169.254, GCP metadata.google.internal, Azure IMDS), and protocol smuggling (file:///etc/passwd, gopher://127.0.0.1:6379/_INFO) so the caller weaponises the server's outbound fetch helper to reach internal network resources or exfiltrate cloud-instance IAM credentials (Capital One / AWS IMDS 2019 breach shape); disjoint from --path-traversal (which reshapes the request path, not a fetch-target parameter) and --mass-assign (which injects privileged JSON properties, not URL rewrites); requests with no URL-bearing parameter emit no variants; off by default because the SSRF payloads reach the server's internal network including cloud metadata endpoints whose response can contain IAM credentials (OWASP A10:2021)")
 	scanCmd.Flags().BoolVar(&scanOpenRedirect, "open-redirect", false,
 		"test unvalidated-redirect / open-redirect using the caller's own credentials: for each redirect-destination query parameter, urlencoded body parameter, and top-level JSON string field (matched by name — next, redirect, redirect_uri, redirect_url, redir, return, returnto, return_url, goto, dest, destination, callback, continue, target, url, success, back — or by value parsing as an absolute http(s) URL) AND the Referer header when present, rewrite the value to seven disjoint open-redirect payloads spanning textbook external URLs (https://attacker.example/), URL-parser disagreement (backslash-host https://attacker.example\\@target.example/, userinfo-confusion https://target.example@attacker.example/, protocol-relative //attacker.example/), validator-bypass (whitespace-prefix), and XSS-via-redirect (data: / javascript: schemes) so the application bounces the caller's browser to an attacker-controlled destination — turning the trusted host into a phishing-redirect surface or leaking OAuth authorization codes via the redirect_uri; disjoint from --ssrf-probe (which targets server-side fetch helpers reaching internal IPs / cloud metadata, not the client-side Location header) and --origin-spoof (which spoofs the Origin/Referer to bypass origin-validation CSRF, not coerce a redirect destination); requests with no redirect-destination parameter and no Referer emit no variants; off by default because the payloads point callers' browsers at attacker URLs and embed XSS-via-redirect shapes (CWE-601 / ASVS V5.1.5)")
+	scanCmd.Flags().BoolVar(&scanSAMLTamper, "saml-tamper", false,
+		"test SAML SSO assertion bypasses using the caller's own credentials: decode the SAMLResponse form parameter in a captured IdP POST callback, then emit two variants — (1) signature-strip: remove the <ds:Signature> block entirely, testing whether the service provider skips signature validation when the element is absent (OWASP SAML Security Cheat Sheet signature-exclusion bypass, ASVS V3.5.3); (2) nameid-swap: replace the <saml:NameID> with a privileged target value (admin / administrator / root) while keeping the original signature intact, testing whether the SP reads the identity outside the signed boundary; both variants keep the caller's own session credentials untouched; off by default because they forge or tamper with SAML assertion material and should only be run against systems the operator is authorised to test")
 }
 
 func resetScanFlags() {
@@ -214,6 +217,7 @@ func resetScanFlags() {
 	scanPathTraversal = false
 	scanSSRFProbe = false
 	scanOpenRedirect = false
+	scanSAMLTamper = false
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -337,7 +341,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// derived from its representative sample's auth components.
 	attributionWarnings := attributeEndpoints(endpoints, matrix)
 
-	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate, scanJWTAttack, scanMassAssign, scanXXE, scanGraphQL, scanForbidBypass, scanWSHijack, scanCSRFHeader, scanMethodOverride, scanHostHeader, scanCookieTamper, scanHeaderInject, scanParamPollution, scanOriginSpoof, scanCTConfusion, scanCacheDeception, scanProtoPollution, scanPathTraversal, scanSSRFProbe, scanOpenRedirect)
+	reg, err := buildRegistry(scanJWTWordlist, scanEnumerate, scanJWTAttack, scanMassAssign, scanXXE, scanGraphQL, scanForbidBypass, scanWSHijack, scanCSRFHeader, scanMethodOverride, scanHostHeader, scanCookieTamper, scanHeaderInject, scanParamPollution, scanOriginSpoof, scanCTConfusion, scanCacheDeception, scanProtoPollution, scanPathTraversal, scanSSRFProbe, scanOpenRedirect, scanSAMLTamper)
 	if err != nil {
 		return err
 	}
@@ -1276,7 +1280,7 @@ func buildEvaluator(name string, matrix *model.RoleMatrix) (detect.Evaluator, er
 // PrototypePollution, and PathTraversal are always registered but inert in
 // their disabled state, so the canonical DefaultRegistry order (and the
 // order test) stays unchanged.
-func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, xxe, graphql, forbidBypass, wsHijack, csrfHeader, methodOverride, hostHeader, cookieTamper, headerInjection, paramPollution, originSpoof, ctConfusion, cacheDeception, protoPollution, pathTraversal, ssrfProbe, openRedirect bool) (*mutate.Registry, error) {
+func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, xxe, graphql, forbidBypass, wsHijack, csrfHeader, methodOverride, hostHeader, cookieTamper, headerInjection, paramPollution, originSpoof, ctConfusion, cacheDeception, protoPollution, pathTraversal, ssrfProbe, openRedirect, samlTamper bool) (*mutate.Registry, error) {
 	enumMutator := mutate.EnumerateID{N: enumerateN}
 	jwtAuthMutator := mutate.JWTAuth{Enabled: jwtAttack}
 	massAssignMutator := mutate.MassAssign{Enabled: massAssign}
@@ -1297,15 +1301,17 @@ func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, x
 	pathTraversalMutator := mutate.PathTraversal{Enabled: pathTraversal}
 	ssrfProbeMutator := mutate.SSRFProbe{Enabled: ssrfProbe}
 	openRedirectMutator := mutate.OpenRedirect{Enabled: openRedirect}
+	samlTamperMutator := mutate.SAMLTamper{Enabled: samlTamper}
 
 	if wordlistPath == "" {
 		// Extend the default registry with EnumerateID + JWTAuth +
 		// MassAssign + XXE + GraphQL + ForbiddenBypass + WSHijack + CSRFHeader +
 		// MethodOverride + HostHeader + CookieTamper + HeaderInjection +
 		// ParamPollution + OriginSpoof + ContentTypeConfusion + CacheDeception +
-		// PrototypePollution + PathTraversal (all no-op when disabled).
+		// PrototypePollution + PathTraversal + SSRFProbe + OpenRedirect +
+		// SAMLTamper (all no-op when disabled).
 		base := mutate.DefaultRegistry()
-		all := append(base.All(), enumMutator, jwtAuthMutator, massAssignMutator, xxeMutator, graphqlMutator, forbidMutator, wsHijackMutator, csrfHeaderMutator, methodOverrideMutator, hostHeaderMutator, cookieTamperMutator, headerInjectionMutator, paramPollutionMutator, originSpoofMutator, ctConfusionMutator, cacheDeceptionMutator, protoPollutionMutator, pathTraversalMutator, ssrfProbeMutator, openRedirectMutator)
+		all := append(base.All(), enumMutator, jwtAuthMutator, massAssignMutator, xxeMutator, graphqlMutator, forbidMutator, wsHijackMutator, csrfHeaderMutator, methodOverrideMutator, hostHeaderMutator, cookieTamperMutator, headerInjectionMutator, paramPollutionMutator, originSpoofMutator, ctConfusionMutator, cacheDeceptionMutator, protoPollutionMutator, pathTraversalMutator, ssrfProbeMutator, openRedirectMutator, samlTamperMutator)
 		return mutate.NewRegistry(all...), nil
 	}
 	data, err := os.ReadFile(wordlistPath)
@@ -1352,6 +1358,7 @@ func buildRegistry(wordlistPath string, enumerateN int, jwtAttack, massAssign, x
 		pathTraversalMutator,
 		ssrfProbeMutator,
 		openRedirectMutator,
+		samlTamperMutator,
 	), nil
 }
 

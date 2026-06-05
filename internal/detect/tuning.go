@@ -367,6 +367,8 @@ func MutatorClass(mutatorType string) string {
 		return "authn-bypass"
 	case "jwt-hmac-crack":
 		return "privesc"
+	case "saml-tamper-sig-strip", "saml-tamper-nameid-swap":
+		return "authn-bypass"
 	default:
 		return ""
 	}
