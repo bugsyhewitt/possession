@@ -172,10 +172,12 @@ func (pp PrototypePollution) Generate(base *model.CapturedRequest, _ *model.Role
 	}(nil), pollutionVectors...)
 	sort.Slice(vectors, func(i, j int) bool { return vectors[i].Name < vectors[j].Name })
 
+	// doc is already parsed above; pass it to injectPollutionFrom to avoid
+	// re-unmarshaling base.Body for each of the (props × vectors) variants.
 	out := make([]model.Variant, 0, len(props)*len(vectors))
 	for _, p := range props {
 		for _, v := range vectors {
-			polluted := injectPollution(base.Body, v.Build(p.Key, p.Value))
+			polluted := injectPollutionFrom(doc, v.Build(p.Key, p.Value))
 			if polluted == nil {
 				continue
 			}
@@ -213,13 +215,29 @@ func injectPollution(body []byte, payload map[string]interface{}) []byte {
 	if err := json.Unmarshal(body, &doc); err != nil {
 		return nil
 	}
+	return injectPollutionFrom(doc, payload)
+}
+
+// injectPollutionFrom merges the pollution payload into a shallow copy of
+// base, guarding against overwriting any of the caller's existing keys, and
+// marshals the result. Splitting the parse step out lets Generate unmarshal
+// the body once and reuse the parsed doc across all (property × vector)
+// iterations instead of re-parsing per variant.
+//
+// Case-sensitive key guard: __proto__ / constructor / prototype are JavaScript
+// reserved names; the JSON merge layer compares them literally. We also guard
+// the lower-cased form to catch any ambiguous caller-supplied keys.
+func injectPollutionFrom(base map[string]interface{}, payload map[string]interface{}) []byte {
+	// Shallow copy so mutations don't bleed across loop iterations.
+	doc := make(map[string]interface{}, len(base)+len(payload))
+	for k, v := range base {
+		doc[k] = v
+	}
 	// Add each pollution-payload top-level key alongside the caller's
 	// existing keys. We do NOT overwrite an existing key — if the caller
 	// already sends, say, "__proto__" themselves (vanishingly rare in real
 	// traffic), the test proves nothing, so skip the variant by returning
-	// nil. Case-sensitive: __proto__ / constructor / prototype are
-	// JavaScript reserved names, the JSON merge layer compares them
-	// literally.
+	// nil.
 	for k := range payload {
 		if _, exists := doc[strings.ToLower(k)]; exists {
 			return nil

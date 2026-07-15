@@ -183,13 +183,9 @@ func (s SAMLTamper) Generate(base *model.CapturedRequest, _ *model.RoleMatrix) [
 			}
 			// Substitute the target NameID into all occurrences (there may be
 			// two: one in Subject and one in AttributeStatement or Conditions).
-			swapped := reNameID.ReplaceAllStringFunc(xml, func(match string) string {
-				parts := reNameID.FindStringSubmatch(match)
-				if len(parts) != 4 {
-					return match
-				}
-				return parts[1] + target + parts[3]
-			})
+			// Back-references ${1} and ${3} reuse the match's capture groups
+			// directly, avoiding a redundant FindStringSubmatch inside the loop.
+			swapped := reNameID.ReplaceAllString(xml, "${1}"+target+"${3}")
 			if req := replaceFormParam(base, vals, "SAMLResponse", reEncode(swapped)); req != nil {
 				out = append(out, model.Variant{
 					Base: req,
