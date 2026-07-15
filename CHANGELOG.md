@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [1.2.0] — 2026-07-14
+
 ### Added
 
 - **SAML assertion tamper mutator** (`--saml-tamper`,
@@ -445,6 +449,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--xxe`, and `--mass-assign`. Registered (inert when disabled) so the canonical
   `DefaultRegistry` order is unchanged.
 
+- **Path-traversal mutator** (`--path-traversal`, `internal/mutate/path_traversal.go`):
+  a new mutator targeting OWASP A01 path-traversal / LFI at the URL path layer. For
+  every captured request, emits variants that reshape the request path with dotdot
+  (`../../../etc/passwd`), URL-encoded (`%2e%2e%2f`), double-encoded, null-byte
+  (`%00`), absolute, nested, and Windows-style sequences targeting canonical
+  disclosure probes (`/etc/passwd`, `/proc/self/environ`, `win.ini`). Finding class
+  `path-traversal`, severity HIGH. Off by default (`--path-traversal`). Non-path
+  requests produce no variants.
+
+- **Forbidden bypass mutator** (`--forbidden-bypass`, `internal/mutate/forbidden_bypass.go`):
+  a new mutator in the access-control bypass family. Rewrites the request path via
+  `X-Original-URL`, `X-Rewrite-URL`, `X-Forwarded-For` override headers, and common
+  path-decoration tricks (trailing slash, case toggle, encoded slash) to bypass
+  route-level `403`/`401` gates enforced by a fronting proxy that the application
+  router does not re-enforce. Every variant keeps the caller's own credentials. Off by
+  default (`--forbidden-bypass`).
+
+- **GraphQL operation-level authz testing** (`--graphql`, `internal/mutate/graphql.go`):
+  first-class GraphQL support. Parses a `/graphql` POST body into named operations,
+  runs the identity-swap ladder per operation rather than treating the whole POST as
+  one opaque endpoint, and detects field-level BOLA via variable substitution
+  (`getProfile(id: 101)` → swap to another identity's `id`). Optionally consumes an
+  introspection schema for full-operation enumeration. Dedup key is operation name
+  + variables hash so owner attribution and the comparative ladder work per operation.
+  Off by default (`--graphql`).
+
+- **Allowlist suppression** (`--allowlist <file>`, `--update-allowlist`,
+  `internal/suppress/`): suppress known-false-positive findings by URL × mutation-type
+  key stored in a YAML allowlist file. `--update-allowlist` auto-appends each finding
+  from the current run so suppressions can be curated incrementally. Allowlisted
+  findings are excluded from exit code 3 and all reporters. The suppression key
+  is deterministic (`method:host:path_template:mutator_name`) so it survives
+  re-parameterisation of the same endpoint.
+
+- **Resource-reference swap mutator** (`--swap-object`, `internal/mutate/swap_object.go`):
+  closes the IDOR gap between Autorize (credential swap) and BOLA (resource-ID swap).
+  For each endpoint with a `{id}` path segment, query param, or JSON body field
+  matching a known resource name, substitutes another identity's resource ID while
+  leaving the caller's own credentials untouched — the textbook "can alice, with her
+  own token, read bob's object?" test. Identity `resources:` block in the role matrix
+  declares each identity's owned IDs. Finding class `idor`.
+
+- **Sequential ID enumeration mutator** (`--enumerate N`, `internal/mutate/enumerate_id.go`):
+  for endpoints with a numeric ID segment, fires the same authenticated request across
+  ±N neighboring IDs and reports any that return owner-shaped 2xx responses. Findings
+  are clustered per endpoint (one `idor` finding with an evidence list) so a sweep of
+  200 IDs does not produce 200 allowlist entries. Off by default; respects `--rate`.
+
+- **Record / replay mode** (`--record <dir>`, `--replay <dir>`, `internal/record/`):
+  `--record` writes every baseline and variant request+response to an on-disk
+  `recording.json` (atomic write, versioned schema). `--replay` skips the network
+  entirely and feeds saved responses back into the detection loop for offline
+  threshold tuning, evaluator A/B testing, or re-scanning a target you only had
+  permission to hit once. Variant IDs are deterministic so replay matches
+  index-for-index; absent variants become inconclusive placeholders.
+  Mutually exclusive with `--resume`; composes with `--record`.
+
+- **Automated marker harvesting** (`--learn-markers`, `internal/detect/harvest.go`):
+  during the baseline phase, extracts candidate unique tokens (emails, UUIDs, long
+  digit runs, account-ID shapes) from each identity's self-replay responses and
+  promotes those that are stable for one identity and unique across all identities
+  into that identity's effective `Markers` set. Augments but never overwrites
+  operator-supplied markers. Lowers the barrier to high-confidence IDOR detection on
+  targets where the operator does not know each identity's unique strings up front.
+
+- **Markdown reporter** (`--report markdown`, `internal/report/markdown.go`): a fourth
+  output format generating GitHub-Flavored Markdown with collapsible per-finding repro
+  blocks (raw HTTP + `curl`). Purpose-built for PR comments and bug-bounty submissions.
+  Credential values redacted to `<bearer:identity>` placeholders by default;
+  `--repro-creds` emits live tokens.
+
+- **Repro block in JSON reporter** (`model.Finding.Repro`): every finding in
+  `--report json` now embeds a `repro` object with three fields: `http` (raw
+  HTTP/1.1 request block), `curl` (single-line shell command), and `differential`
+  (baseline → variant status/size/similarity summary). Downstream triage tooling can
+  copy-paste reproductions without requiring a markdown or HTML render pass.
+  Credential values redacted by default; `--repro-creds` emits live tokens.
+
+- **Verdict ladder branch 9b — different-resource access detection**
+  (`internal/detect/evaluate.go`, `internal/detect/tuning.go`): closes the D44 /
+  v1.1 limitation where the comparative ladder could not distinguish "access denied
+  with a non-standard body" from "server returned a different object the caller does
+  not own." For `swap-identity` and `swap-object` variants that draw a 2xx with a
+  non-denial body yet diverge from the owner baseline (similarity below `SuspectLow`),
+  the verdict is now `suspected` at `DiffResourceConfidence` (low band) rather than
+  `enforced`. Scoped to resource-swap mutators only; unrelated mutators returning a
+  divergent body continue to classify as `enforced`. Gate E preserved: secureapp
+  still emits zero bypass verdicts.
+
 ### Fixed
 
 - **Captured/mutated `Host` header now reaches the wire**
@@ -742,8 +835,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `detectFormat` (`--format openapi`, plus `.yaml`/`.yml` extension and
   `openapi`/`swagger` content-key auto-detection that disambiguates OpenAPI JSON
   from HAR JSON). Synthesized endpoints feed every existing mutator unchanged.
-
-### Fixed
 
 - **Data race in `TestScanRecordThenReplay_RoundTrip`** (`internal/cli/
   scan_record_test.go`): the end-to-end record/replay test counted server hits
