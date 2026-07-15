@@ -1,5 +1,9 @@
 # possession
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/bugsyhewitt/bugsyhewitt.github.io/main/public/cards/possession.jpg" alt="possession" width="680">
+</p>
+
 [![CI](https://github.com/bugsyhewitt/possession/actions/workflows/ci.yml/badge.svg)](https://github.com/bugsyhewitt/possession/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Go Reference](https://pkg.go.dev/badge/github.com/bugsyhewitt/possession.svg)](https://pkg.go.dev/github.com/bugsyhewitt/possession)
