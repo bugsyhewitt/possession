@@ -193,13 +193,12 @@ func (sp SSRFProbe) Generate(base *model.CapturedRequest, _ *model.RoleMatrix) [
 		return nil
 	}
 
-	techniques := append([]string(nil), ssrfTechniques...)
-	sort.Strings(techniques)
-
+	// ssrfTechniques is declared in sorted order at package level;
+	// iterating it directly avoids a per-call copy and sort.
 	var out []model.Variant
-	out = append(out, sp.queryVariants(base, techniques)...)
-	out = append(out, sp.bodyVariants(base, techniques)...)
-	out = append(out, sp.jsonVariants(base, techniques)...)
+	out = append(out, sp.queryVariants(base, ssrfTechniques)...)
+	out = append(out, sp.bodyVariants(base, ssrfTechniques)...)
+	out = append(out, sp.jsonVariants(base, ssrfTechniques)...)
 	return out
 }
 

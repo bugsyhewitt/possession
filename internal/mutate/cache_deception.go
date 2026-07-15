@@ -1,7 +1,6 @@
 package mutate
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/bugsyhewitt/possession/internal/model"
@@ -183,11 +182,11 @@ func (cd CacheDeception) Generate(base *model.CapturedRequest, _ *model.RoleMatr
 		return nil
 	}
 
-	// Deterministic copies sorted alphabetically; the order test pins both.
-	exts := append([]string(nil), cacheableExtensions...)
-	sort.Strings(exts)
-
-	// The four shape names, sorted so the cross-product emission order is
+	// Both slices are declared in sorted order at package level so no
+	// copy or re-sort is needed here; iterating the package-level vars
+	// directly keeps generation deterministic without per-call allocation.
+	//
+	// The four shape names are sorted so the cross-product emission order is
 	// deterministic regardless of insertion order below. Pinned by the
 	// order test.
 	shapes := []string{
@@ -196,11 +195,10 @@ func (cd CacheDeception) Generate(base *model.CapturedRequest, _ *model.RoleMatr
 		"path-suffix",
 		"semicolon-suffix",
 	}
-	sort.Strings(shapes)
 
 	var out []model.Variant
 	for _, shape := range shapes {
-		for _, ext := range exts {
+		for _, ext := range cacheableExtensions {
 			decoded, escaped, ok := buildCacheDeceptionPath(shape, origPath, ext)
 			if !ok {
 				continue
